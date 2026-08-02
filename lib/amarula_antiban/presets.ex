@@ -67,7 +67,7 @@ defmodule AmarulaAntiban.Presets do
               on_risk_change: nil,
               on_timelock_detected: nil,
               on_timelock_lifted: nil,
-              rand_fun: &:rand.uniform/0
+              rand_fun: &:rand.uniform_real/0
   end
 
   defp presets do

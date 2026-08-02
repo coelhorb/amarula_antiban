@@ -31,4 +31,5 @@
   "uuid": {:hex, :uuid, "1.1.8", "e22fc04499de0de3ed1116b770c7737779f226ceefa0badb3592e64d5cfb4eb9", [:mix], [], "hexpm", "c790593b4c3b601f5dc2378baae7efaf5b3d73c4c6456ba85759905be792f2ac"},
   "websockex": {:hex, :websockex, "0.5.1", "9de28d37bbe34f371eb46e29b79c94c94fff79f93c960d842fbf447253558eb4", [:mix], [{:telemetry, "~> 1.0", [hex: :telemetry, repo: "hexpm", optional: false]}], "hexpm", "8ef39576ed56bc3804c9cd8626f8b5d6b5721848d2726c0ccd4f05385a3c9f14"},
   "xml_builder": {:hex, :xml_builder, "2.4.0", "b20d23077266c81f593360dc037ea398461dddb6638a329743da6c73afa56725", [:mix], [], "hexpm", "833e325bb997f032b5a1b740d2fd6feed3c18ca74627f9f5f30513a9ae1a232d"},
+  "zoneinfo": {:hex, :zoneinfo, "0.1.9", "6f5188e836cc057ef13d8ab659464fccfda032d48b8574619fc12a58f0579c2b", [:mix], [], "hexpm", "8bc3266afe79ab668de4fb2a7f182152c90f610bdd8519528e8ea1af70e0dea8"},
 }

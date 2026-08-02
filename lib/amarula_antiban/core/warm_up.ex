@@ -27,7 +27,7 @@ defmodule AmarulaAntiban.Core.WarmUp do
               day1_limit: 20,
               growth_factor: nil,
               inactivity_threshold_hours: 72,
-              rand_fun: &:rand.uniform/0
+              rand_fun: &:rand.uniform_real/0
   end
 
   defmodule Status do
@@ -175,11 +175,13 @@ defmodule AmarulaAntiban.Core.WarmUp do
     config = struct!(Config, options)
 
     if is_nil(config.growth_factor) do
-      %{config | growth_factor: round((1.5 + config.rand_fun.() * 0.7) * 100) / 100}
+      %{config | growth_factor: round((1.5 + sample(config.rand_fun) * 0.7) * 100) / 100}
     else
       config
     end
   end
+
+  defp sample(rand_fun), do: rand_fun.() |> max(0.0) |> min(1.0 - 1.0e-12)
 
   defp config_options(%Presets.Config{} = config) do
     config

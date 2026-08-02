@@ -29,6 +29,7 @@ defmodule AmarulaAntiban.MixProject do
       {:amarula, path: "../amarula"},
       {:telemetry, "~> 1.2"},
       {:jason, "~> 1.4"},
+      {:zoneinfo, "~> 0.1.9"},
       {:req, "~> 0.5", optional: true},
       {:ex_doc, "~> 0.38", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},

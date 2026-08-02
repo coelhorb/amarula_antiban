@@ -145,4 +145,12 @@ defmodule AmarulaAntiban.Core.WarmUpTest do
       assert limits == Enum.sort(limits)
     end
   end
+
+  test "default growth factor normalizes injected RNG endpoints" do
+    assert :erlang.fun_info(WarmUp.new([], @now).config.rand_fun, :name) ==
+             {:name, :uniform_real}
+
+    assert WarmUp.new([rand_fun: fn -> 0.0 end], @now).config.growth_factor == 1.5
+    assert WarmUp.new([rand_fun: fn -> 1.0 end], @now).config.growth_factor == 2.2
+  end
 end

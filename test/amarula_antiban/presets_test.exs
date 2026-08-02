@@ -117,4 +117,8 @@ defmodule AmarulaAntiban.PresetsTest do
     assert Presets.all() |> Map.keys() |> Enum.sort() ==
              [:aggressive, :conservative, :high_volume, :moderate]
   end
+
+  test "default RNG uses the Math.random-compatible source" do
+    assert :erlang.fun_info(Presets.resolve().rand_fun, :name) == {:name, :uniform_real}
+  end
 end

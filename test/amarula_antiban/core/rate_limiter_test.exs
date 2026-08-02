@@ -230,4 +230,24 @@ defmodule AmarulaAntiban.Core.RateLimiterTest do
       assert delay in minimum..maximum
     end
   end
+
+  test "Gaussian jitter accepts injected RNG endpoints without escaping configured bounds" do
+    assert :erlang.fun_info(RateLimiter.new().config.rand_fun, :name) ==
+             {:name, :uniform_real}
+
+    for endpoint <- [0.0, 1.0] do
+      limiter =
+        RateLimiter.new(
+          min_delay_ms: 100,
+          max_delay_ms: 200,
+          new_chat_delay_ms: 0,
+          burst_allowance: 0,
+          rand_fun: fn -> endpoint end
+        )
+        |> RateLimiter.restore_known_chats([@jid])
+
+      assert {:allow, delay, _limiter} = RateLimiter.get_delay(limiter, @jid, "", @now)
+      assert delay in 100..200
+    end
+  end
 end

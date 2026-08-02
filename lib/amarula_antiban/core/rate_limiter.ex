@@ -43,7 +43,7 @@ defmodule AmarulaAntiban.Core.RateLimiter do
               max_identical_messages: 3,
               burst_allowance: 3,
               identical_message_window_ms: 3_600_000,
-              rand_fun: &:rand.uniform/0
+              rand_fun: &:rand.uniform_real/0
   end
 
   defmodule Stats do
@@ -323,13 +323,15 @@ defmodule AmarulaAntiban.Core.RateLimiter do
   end
 
   defp jitter(config, minimum, maximum) do
-    u1 = config.rand_fun.()
-    u2 = config.rand_fun.()
+    u1 = max(sample(config.rand_fun), 1.0e-12)
+    u2 = sample(config.rand_fun)
     normal = :math.sqrt(-2 * :math.log(u1)) * :math.cos(2 * :math.pi() * u2)
     normalized = (normal + 3) / 6
     clamped = normalized |> max(0) |> min(1)
     round(minimum + clamped * (maximum - minimum))
   end
+
+  defp sample(rand_fun), do: rand_fun.() |> max(0.0) |> min(1.0 - 1.0e-12)
 
   defp cleanup(limiter, now_ms) do
     messages = messages_since(limiter.messages, now_ms, @millisecond_per_day)
