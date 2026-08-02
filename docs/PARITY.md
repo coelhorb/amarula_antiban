@@ -37,3 +37,23 @@ delegates their behavior to Amarula:
   shared/owned resolver lifecycle, message updates, and group-metadata learning.
 
 This delegation avoids two mutable sources of truth for LID↔PN identity.
+
+## W4 — Topology throttling and ban recovery
+
+| Upstream module | Elixir surface | Status | Notes |
+|---|---|---|---|
+| `topologyThrottler.ts` | `AmarulaAntiban.Core.TopologyThrottler` | Partial by design | Ports the graph-expansion gate (hourly/daily new-contact caps, cooldown, 7-day reply-ratio requirement) and the `assessContact` risk formula exactly (same weights and thresholds). `maxContactsFromSameSource`/`sourceGroup` hotspot detection is not ported — it depends on group-membership metadata Amarula does not yet expose to the plugin. `assess/4` always treats `knownGroups` as empty, matching upstream's own default when the caller passes no context (conservative — never under-estimates risk). |
+| `banRecoveryOrchestrator.ts` | `AmarulaAntiban.Core.BanRecovery` | Full logic, different mechanism | Preserves all four recovery plans (timelock/rate_overlimit/soft_ban/hard_ban), the 3-bans-in-30-days escalation to hard ban, and the weekly compounding ramp exactly. Upstream's external `tick()` (must be called once a week to advance the ramp) is replaced by a pure recompute of `rate_multiplier`/`phase` from elapsed time in `status/2`, the same pattern already used by `Core.Health.status/2` and `Core.WarmUp.status/2`. This is mathematically equivalent to calling `tick()` weekly, so no behavior is lost. Upstream's `recovering`/`ramping` phases (which differ only in whether a tick has fired yet) collapse into a single `:recovering` phase here, since they never differed in behavior. `pause_until` never persists as `:infinity` — `status/2` short-circuits for `:hard_ban` before ever reading it, so the field always stays a plain integer or `nil`, avoiding an incompatibility with `Snapshot`'s generic external-data type validation. |
+
+`Session` wires the two modules into the `beforeSend` decision chain at upstream's
+positions: `decide_topology` runs between the contact-graph and reply-ratio
+guards; the `BanRecovery` pause/rate gate runs first, right after the
+health-paused check and before `TimelockGuard`. `BanRecovery.record_ban_event/3`
+is auto-triggered from a critical `Health` risk change (`:soft_ban`) and from a
+401 disconnect (`:hard_ban`); a single 463 stays `TimelockGuard`'s own timed
+block and does **not** by itself start a `BanRecovery` pause — layering a
+24-hour full-session pause on every routine reachout timelock would fight
+`TimelockGuard`'s existing, independently-tested resume mechanism. Hosts that
+detect `:timelock` or `:rate_overlimit` ban signals through their own channels
+(no WA disconnect code maps to HTTP 429 in this port) call
+`Session.record_ban_event/2` explicitly.

@@ -9,7 +9,14 @@ defmodule AmarulaAntiban.Application do
   def start(_type, _args) do
     children = [
       {Registry, keys: :unique, name: AmarulaAntiban.Registry},
-      {DynamicSupervisor, name: AmarulaAntiban.SessionSupervisor, strategy: :one_for_one},
+      {Registry, keys: :unique, name: AmarulaAntiban.PersistenceRegistry},
+      {Registry, keys: :unique, name: AmarulaAntiban.EventBridgeRegistry},
+      AmarulaAntiban.SessionLifecycle,
+      AmarulaAntiban.SessionSupervisor,
+      AmarulaAntiban.PersistenceSupervisor,
+      AmarulaAntiban.EventBridgeSupervisor,
+      AmarulaAntiban.StateStore.Ets,
+      {Task.Supervisor, name: AmarulaAntiban.Session.TaskSupervisor},
       {Task.Supervisor, name: AmarulaAntiban.Webhook.TaskSupervisor},
       {Task.Supervisor, name: AmarulaAntiban.Queue.TaskSupervisor}
     ]

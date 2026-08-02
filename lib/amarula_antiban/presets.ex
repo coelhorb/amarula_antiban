@@ -39,6 +39,8 @@ defmodule AmarulaAntiban.Presets do
             on_risk_change: function() | nil,
             on_timelock_detected: function() | nil,
             on_timelock_lifted: function() | nil,
+            on_hard_ban: function() | nil,
+            on_recovery_phase_change: function() | nil,
             rand_fun: rand_fun()
           }
 
@@ -67,6 +69,8 @@ defmodule AmarulaAntiban.Presets do
               on_risk_change: nil,
               on_timelock_detected: nil,
               on_timelock_lifted: nil,
+              on_hard_ban: nil,
+              on_recovery_phase_change: nil,
               rand_fun: &:rand.uniform_real/0
   end
 

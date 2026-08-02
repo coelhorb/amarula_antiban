@@ -31,6 +31,21 @@ defmodule AmarulaAntiban.Telemetry do
   * `webhook.sent` — measurements: `status`; metadata: optional `profile`.
   * `webhook.failed` — measurements: optional `status`; metadata: optional
     `profile`.
+  * `session.decision` — measurements: `delay_ms`; metadata: `session_id`,
+    `outcome`, optional `reason`.
+  * `session.risk_changed` — measurements: `score`; metadata: `session_id`, `risk`.
+  * `session.timelock_detected`, `session.timelock_lifted` — measurements: `count`;
+    metadata: `session_id`.
+  * `session.protocol_restart` — measurements: `count`; metadata: `session_id`, `code`.
+  * `session.paused`, `session.resumed` — measurements: `count`; metadata:
+    `session_id`, and a safe `reason` for pause.
+  * `session.persistence_failed`, `session.restore_failed` — measurements: `count`;
+    metadata: `session_id`, safe `reason`.
+  * `session.low_delivery_rate` — measurements: `delivery_rate`; metadata: `session_id`.
+  * `session.effect` — measurements: `count`; metadata: `session_id`, `effect`.
+  * `session.recovery_started` — measurements: `count`; metadata: `session_id`.
+  * `session.recovery_escalated` — measurements: `count`; metadata: `session_id`.
+  * `session.hard_ban_detected` — measurements: `count`; metadata: `session_id`.
 
   `contracts/0` exposes the same schema as data for consumers and tests.
   """
@@ -107,12 +122,82 @@ defmodule AmarulaAntiban.Telemetry do
       event: [:amarula_antiban, :webhook, :failed],
       measurements: %{status: "optional non_neg_integer()"},
       metadata: %{profile: "optional term()"}
+    },
+    %{
+      event: [:amarula_antiban, :session, :decision],
+      measurements: %{delay_ms: "non_neg_integer()"},
+      metadata: %{session_id: "term()", outcome: ":allow | :deny", reason: "atom() | nil"}
+    },
+    %{
+      event: [:amarula_antiban, :session, :risk_changed],
+      measurements: %{score: "0..100"},
+      metadata: %{session_id: "term()", risk: ":low | :medium | :high | :critical"}
+    },
+    %{
+      event: [:amarula_antiban, :session, :timelock_detected],
+      measurements: %{count: "pos_integer()"},
+      metadata: %{session_id: "term()"}
+    },
+    %{
+      event: [:amarula_antiban, :session, :timelock_lifted],
+      measurements: %{count: "pos_integer()"},
+      metadata: %{session_id: "term()"}
+    },
+    %{
+      event: [:amarula_antiban, :session, :protocol_restart],
+      measurements: %{count: "pos_integer()"},
+      metadata: %{session_id: "term()", code: "515"}
+    },
+    %{
+      event: [:amarula_antiban, :session, :paused],
+      measurements: %{count: "pos_integer()"},
+      metadata: %{session_id: "term()", reason: "atom() | integer()"}
+    },
+    %{
+      event: [:amarula_antiban, :session, :resumed],
+      measurements: %{count: "pos_integer()"},
+      metadata: %{session_id: "term()"}
+    },
+    %{
+      event: [:amarula_antiban, :session, :persistence_failed],
+      measurements: %{count: "pos_integer()"},
+      metadata: %{session_id: "term()", reason: "atom() | integer()"}
+    },
+    %{
+      event: [:amarula_antiban, :session, :restore_failed],
+      measurements: %{count: "pos_integer()"},
+      metadata: %{session_id: "term()", reason: "atom() | integer()"}
+    },
+    %{
+      event: [:amarula_antiban, :session, :low_delivery_rate],
+      measurements: %{delivery_rate: "float()"},
+      metadata: %{session_id: "term()"}
+    },
+    %{
+      event: [:amarula_antiban, :session, :effect],
+      measurements: %{count: "pos_integer()"},
+      metadata: %{session_id: "term()", effect: "atom()"}
+    },
+    %{
+      event: [:amarula_antiban, :session, :recovery_started],
+      measurements: %{count: "pos_integer()"},
+      metadata: %{session_id: "term()"}
+    },
+    %{
+      event: [:amarula_antiban, :session, :recovery_escalated],
+      measurements: %{count: "pos_integer()"},
+      metadata: %{session_id: "term()"}
+    },
+    %{
+      event: [:amarula_antiban, :session, :hard_ban_detected],
+      measurements: %{count: "pos_integer()"},
+      metadata: %{session_id: "term()"}
     }
   ]
 
   @events Enum.map(@event_contracts, fn contract -> contract.event end)
 
-  @doc "Lists every canonical event this library may emit in W5."
+  @doc "Lists every canonical event this library may emit."
   @spec events() :: [[atom()]]
   def events, do: @events
 

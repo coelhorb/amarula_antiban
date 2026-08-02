@@ -52,7 +52,8 @@ defmodule AmarulaAntiban.Core.DeliveryTracker do
 
     {stats, tracker} = stats(tracker, now_ms)
 
-    if (stats.delivery_rate && stats.delivery_rate < tracker.config.low_rate_threshold) and
+    if is_number(stats.delivery_rate) and
+         stats.delivery_rate < tracker.config.low_rate_threshold and
          now_ms - tracker.last_low_rate_alert >= 3_600_000,
        do:
          {%{tracker | last_low_rate_alert: now_ms}, [{:low_delivery_rate, stats.delivery_rate}]},

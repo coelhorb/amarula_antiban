@@ -238,7 +238,7 @@ defmodule AmarulaAntiban.Core.Presence do
   @spec plan(t(), String.t(), integer()) :: {[step()], t()}
   def plan(%__MODULE__{config: config} = presence, _text, _now_ms)
       when not config.enabled or not config.enable_typing_model do
-    {[{:typing, config.typing_min_ms}], presence}
+    {[], presence}
   end
 
   def plan(presence, text, now_ms) do

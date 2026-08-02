@@ -85,9 +85,9 @@ defmodule AmarulaAntiban.Core.PresenceTest do
     assert Presence.reset_stats(presence).counters.typing_plans_computed == 0
   end
 
-  test "disabled typing model returns only minimum typing step" do
+  test "disabled typing model returns no presence traffic" do
     presence = Presence.new(enabled: true, enable_typing_model: false, typing_min_ms: 777)
-    assert {[{:typing, 777}], ^presence} = Presence.plan(presence, "long text", 0)
+    assert {[], ^presence} = Presence.plan(presence, "long text", 0)
   end
 
   test "IANA timezone preserves daylight-saving transitions with explicit clock" do
