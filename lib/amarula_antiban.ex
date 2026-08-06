@@ -8,6 +8,7 @@ defmodule AmarulaAntiban do
   protocol's normal restart-required flow.
   """
 
+  alias AmarulaAntiban.Core.GroupOperationGuard
   alias AmarulaAntiban.EventBridgeSupervisor
   alias AmarulaAntiban.Plugin
   alias AmarulaAntiban.Session
@@ -45,6 +46,25 @@ defmodule AmarulaAntiban do
     |> Keyword.put(:owner, owner)
     |> Keyword.put_new(:profile, session_id)
   end
+
+  @doc """
+  Checks and reserves a group-operation rate-limit slot ahead of an
+  `Amarula.Group.*` call — group operations don't flow through the `on_send`
+  plugin pipeline, so the host calls this explicitly:
+
+      case AmarulaAntiban.check_group_operation(session, :add, group_jid) do
+        {:allow, :ok} -> Amarula.Group.participants(conn, group_jid, participants, :add)
+        {:deny, decision} -> {:error, decision.detail}
+      end
+  """
+  @spec check_group_operation(
+          Session.server() | SessionHandle.t() | term(),
+          GroupOperationGuard.operation(),
+          String.t()
+        ) ::
+          {:allow, :ok} | {:deny, map()}
+  def check_group_operation(session, op, key),
+    do: with_session(session, &Session.check_group_operation(&1, op, key))
 
   @doc """
   Feeds public Amarula events into a session.

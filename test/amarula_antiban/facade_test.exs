@@ -46,6 +46,10 @@ defmodule AmarulaAntiban.FacadeTest do
              })
 
     assert :ok = AmarulaAntiban.handle_event(session, {:amarula, :unknown, %{}})
+
+    assert {:allow, :ok} =
+             AmarulaAntiban.check_group_operation(session, :add, "120000@g.us")
+
     assert :ok = AmarulaAntiban.stop_session(id)
   end
 end

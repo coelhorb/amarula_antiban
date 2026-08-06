@@ -39,6 +39,9 @@ defmodule AmarulaAntiban.Snapshot do
       content_variator: mutable_data(state.content_variator),
       topology_throttler: Core.TopologyThrottler.export(state.topology_throttler),
       ban_recovery: Core.BanRecovery.export(state.ban_recovery),
+      legitimacy_signals: mutable_data(state.legitimacy_signals),
+      group_operation_guard: Core.GroupOperationGuard.export(state.group_operation_guard),
+      human_entropy: mutable_data(state.human_entropy),
       reservations: state.reservations,
       counters: %{
         messages_allowed: state.messages_allowed,
@@ -163,6 +166,21 @@ defmodule AmarulaAntiban.Snapshot do
       :ban_recovery,
       restore_ban_recovery(fresh.ban_recovery, value(payload, :ban_recovery))
     )
+    |> Map.put(
+      :legitimacy_signals,
+      restore_legitimacy_signals(fresh.legitimacy_signals, value(payload, :legitimacy_signals))
+    )
+    |> Map.put(
+      :group_operation_guard,
+      restore_group_operation_guard(
+        fresh.group_operation_guard,
+        value(payload, :group_operation_guard)
+      )
+    )
+    |> Map.put(
+      :human_entropy,
+      restore_struct(fresh.human_entropy, value(payload, :human_entropy))
+    )
     |> Map.put(:reservations, value(payload, :reservations, %{}))
     |> restore_counters(value(payload, :counters, %{}))
   end
@@ -180,6 +198,11 @@ defmodule AmarulaAntiban.Snapshot do
 
   defp restore_ban_recovery(recovery, nil), do: recovery
   defp restore_ban_recovery(recovery, data), do: Core.BanRecovery.restore(recovery, data)
+
+  defp restore_group_operation_guard(guard, nil), do: guard
+
+  defp restore_group_operation_guard(guard, data),
+    do: Core.GroupOperationGuard.restore(guard, data)
 
   defp restore_rate_limiter(limiter, data) do
     data = data || %{}
@@ -216,6 +239,13 @@ defmodule AmarulaAntiban.Snapshot do
   defp restore_jid_canonicalizer(canonicalizer, data) do
     stats = restore_struct(canonicalizer.stats, value(data, :stats, %{}))
     %{canonicalizer | stats: stats}
+  end
+
+  defp restore_legitimacy_signals(injector, nil), do: injector
+
+  defp restore_legitimacy_signals(injector, data) do
+    stats = restore_struct(injector.stats, value(data, :stats, %{}))
+    %{restore_struct(injector, Map.delete(data, :stats)) | stats: stats}
   end
 
   defp restore_counters(state, counters) do
@@ -349,6 +379,9 @@ defmodule AmarulaAntiban.Snapshot do
     _ = Core.JidCanonicalizer.stats(state.jid_canonicalizer)
     _ = Core.TopologyThrottler.stats(state.topology_throttler, now_ms)
     _ = Core.BanRecovery.status(state.ban_recovery, now_ms)
+    _ = Core.LegitimacySignals.stats(state.legitimacy_signals)
+    _ = Core.GroupOperationGuard.stats(state.group_operation_guard)
+    _ = Core.HumanEntropy.stats(state.human_entropy)
     true
   end
 

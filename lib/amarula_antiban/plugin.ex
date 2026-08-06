@@ -18,6 +18,7 @@ defmodule AmarulaAntiban.Plugin do
 
   @behaviour Amarula.Plugin
 
+  alias AmarulaAntiban.HumanEntropySupervisor
   alias AmarulaAntiban.Session
   alias AmarulaAntiban.SessionHandle
   alias AmarulaAntiban.SessionSupervisor
@@ -33,10 +34,32 @@ defmodule AmarulaAntiban.Plugin do
     if attached?(conn, session_id) do
       conn
     else
+      maybe_start_human_entropy(session_id, handle, conn, sleep_fun, options)
+
       conn
       |> Amarula.Plugin.on_send(send_step(conn, handle, sleep_fun))
       |> Amarula.Plugin.on_recv(receive_step(handle))
       |> mark_attached(session_id)
+    end
+  end
+
+  defp maybe_start_human_entropy(session_id, handle, conn, sleep_fun, options) do
+    if human_entropy_enabled?(options) do
+      {:ok, _pid} =
+        HumanEntropySupervisor.ensure_worker(session_id,
+          handle: handle,
+          conn: conn,
+          sleep_fun: sleep_fun
+        )
+    end
+
+    :ok
+  end
+
+  defp human_entropy_enabled?(options) do
+    case Keyword.get(options, :human_entropy, []) do
+      value when is_list(value) or is_map(value) -> Map.new(value)[:enabled] || false
+      _invalid -> false
     end
   end
 
@@ -57,6 +80,7 @@ defmodule AmarulaAntiban.Plugin do
             sleep(delay(decision.delay_ms), sleep_fun)
             execute_presence(conn, recipient, decision.presence_plan, sleep_fun)
             record_presence(handle, decision.presence_plan)
+            ctx = apply_typo(conn, recipient, ctx, message, decision.typo, sleep_fun)
             {:cont, ctx}
 
           {:deny, decision} ->
@@ -66,6 +90,68 @@ defmodule AmarulaAntiban.Plugin do
             {:halt, {:antiban, :session_unavailable}}
         end
     end
+  end
+
+  defp apply_typo(_conn, _recipient, ctx, _message, nil, _sleep_fun), do: ctx
+
+  defp apply_typo(conn, recipient, ctx, message, %{typo_text: typo_text} = typo, sleep_fun) do
+    case with_typo_text(message, typo_text) do
+      ^message ->
+        ctx
+
+      mutated ->
+        schedule_correction(conn, recipient, typo, sleep_fun)
+        %{ctx | message: mutated}
+    end
+  end
+
+  defp with_typo_text(message, typo_text) do
+    cond do
+      is_binary(field(message, :conversation)) ->
+        Map.put(message, :conversation, typo_text)
+
+      is_binary(field(field(message, :extendedTextMessage), :text)) ->
+        Map.update!(message, :extendedTextMessage, &Map.put(&1, :text, typo_text))
+
+      is_binary(field(field(message, :imageMessage), :caption)) ->
+        Map.update!(message, :imageMessage, &Map.put(&1, :caption, typo_text))
+
+      is_binary(field(field(message, :videoMessage), :caption)) ->
+        Map.update!(message, :videoMessage, &Map.put(&1, :caption, typo_text))
+
+      true ->
+        message
+    end
+  end
+
+  defp schedule_correction(
+         conn,
+         recipient,
+         %{correction_delay_ms: delay_ms, correction_text: text},
+         sleep_fun
+       ) do
+    case Process.whereis(AmarulaAntiban.Session.TaskSupervisor) do
+      nil ->
+        :ok
+
+      _pid ->
+        pid = presence_pid(conn)
+
+        Task.Supervisor.start_child(AmarulaAntiban.Session.TaskSupervisor, fn ->
+          sleep(delay_ms, sleep_fun)
+          send_correction(pid, recipient, text)
+        end)
+
+        :ok
+    end
+  end
+
+  defp send_correction(nil, _recipient, _text), do: :ok
+
+  defp send_correction(pid, recipient, text) do
+    Amarula.send_text(pid, recipient, text)
+  catch
+    :exit, _reason -> :ok
   end
 
   defp receive_step(%SessionHandle{} = handle) do

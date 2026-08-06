@@ -148,6 +148,62 @@ defmodule AmarulaAntiban.PluginTest do
     end)
   end
 
+  test "typo injection mutates ctx.message and schedules a correction after the delay" do
+    test_pid = self()
+    unique = System.unique_integer([:positive])
+    profile = "antiban_plugin_typo_#{unique}"
+    root = Path.join(System.tmp_dir!(), profile)
+
+    auth =
+      AuthUtils.init_auth_creds()
+      |> Map.put(:me, %{id: "10000000001@s.whatsapp.net", lid: nil, name: "Antiban Typo Test"})
+
+    conn =
+      Amarula.new(%{
+        profile: profile,
+        storage: {Amarula.Storage.File, root: root},
+        connection_state: :connected,
+        frame_sink: test_pid,
+        offline: true,
+        auth: auth,
+        max_retries: 1,
+        retry_delay: 10
+      })
+      |> Plugin.attach(
+        rand_fun: fn -> 0.5 end,
+        min_delay_ms: 0,
+        max_delay_ms: 0,
+        new_chat_delay_ms: 0,
+        max_identical_messages: 10,
+        auto_pause_at: :critical,
+        legitimacy_signals: [
+          enabled: true,
+          typo_probability: 1.0,
+          typo_correct_min_ms: 5,
+          typo_correct_max_ms: 5
+        ],
+        sleep_fun: fn milliseconds -> send(test_pid, {:slept, milliseconds}) end
+      )
+
+    {:ok, pid} = Amarula.connect(conn, parent_pid: test_pid)
+
+    on_exit(fn ->
+      Amarula.stop(pid)
+      SessionSupervisor.stop_session(profile)
+      File.rm_rf(root)
+    end)
+
+    ctx = send_ctx(conn, profile, "wamid.typo", "hello there my friend")
+    step = List.last(conn.send_steps)
+
+    assert {:cont, mutated} = step.(ctx)
+    assert %Proto.Message{conversation: typo_text} = mutated.message
+    assert typo_text != "hello there my friend"
+    refute mutated == ctx
+
+    assert_receive {:slept, 5}, 1_000
+  end
+
   test "receive step ignores bare sender-key and protocol control frames", context do
     step = List.last(context.conn.recv_steps)
 

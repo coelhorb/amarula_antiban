@@ -16,7 +16,8 @@ defmodule AmarulaAntiban.Decision do
           detail: String.t() | nil,
           health: Health.Status.t(),
           warmup_day: pos_integer() | nil,
-          presence_plan: [Presence.step()]
+          presence_plan: [Presence.step()],
+          typo: AmarulaAntiban.Core.LegitimacySignals.typo() | nil
         }
 
   @enforce_keys [:allowed, :health]
@@ -26,5 +27,6 @@ defmodule AmarulaAntiban.Decision do
             detail: nil,
             health: nil,
             warmup_day: nil,
-            presence_plan: []
+            presence_plan: [],
+            typo: nil
 end

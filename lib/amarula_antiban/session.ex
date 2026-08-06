@@ -128,9 +128,38 @@ defmodule AmarulaAntiban.Session do
   @spec record_send_failed(server(), term()) :: :ok
   def record_send_failed(server, error), do: GenServer.call(server, {:send_failed, error})
 
+  @doc """
+  Checks and, on success, reserves a group-operation rate-limit slot ahead of
+  an `Amarula.Group.*` call. Group operations don't flow through the
+  `on_send` plugin pipeline (it only wraps message sends), so hosts call this
+  explicitly instead of going through `before_send`/`authorize_send`.
+  """
+  @spec check_group_operation(server(), Core.GroupOperationGuard.operation(), String.t()) ::
+          {:allow, :ok}
+          | {:deny,
+             %{
+               reason: :group_operation_limit,
+               detail: String.t(),
+               retry_after_sec: non_neg_integer()
+             }}
+  def check_group_operation(server, op, key),
+    do: GenServer.call(server, {:group_operation, op, key})
+
   @doc "Accounts for a presence plan after the plugin executes it."
   @spec presence_executed(server(), [Core.Presence.step()]) :: :ok
   def presence_executed(server, plan), do: GenServer.cast(server, {:presence_executed, plan})
+
+  @doc """
+  Returns a read-only snapshot of the human-entropy core state for
+  `HumanEntropyWorker` to roll a cycle against, outside this GenServer.
+  """
+  @spec human_entropy_snapshot(server()) :: Core.HumanEntropy.t()
+  def human_entropy_snapshot(server), do: GenServer.call(server, :human_entropy_snapshot)
+
+  @doc "Records the actions a human-entropy cycle executed, for accounting."
+  @spec human_entropy_executed(server(), [Core.HumanEntropy.action()]) :: :ok
+  def human_entropy_executed(server, actions),
+    do: GenServer.cast(server, {:human_entropy_executed, actions})
 
   @doc "Returns a comprehensive immutable statistics snapshot."
   @spec stats(server()) :: map()
@@ -323,7 +352,8 @@ defmodule AmarulaAntiban.Session do
         contact_graph: Core.ContactGraph.incoming(state.core.contact_graph, jid),
         deaf_session: Core.DeafSession.activity(state.core.deaf_session, now_ms),
         topology_throttler:
-          Core.TopologyThrottler.record_replied(state.core.topology_throttler, jid, now_ms)
+          Core.TopologyThrottler.record_replied(state.core.topology_throttler, jid, now_ms),
+        human_entropy: Core.HumanEntropy.track_incoming(state.core.human_entropy, jid, now_ms)
     }
 
     {:reply, suggestion, schedule_persistence(%{state | core: core})}
@@ -338,6 +368,32 @@ defmodule AmarulaAntiban.Session do
     state = apply_effects(%{state | core: %{state.core | health: health}}, effects)
     {:reply, :ok, schedule_persistence(state)}
   end
+
+  def handle_call({:group_operation, op, key}, _from, state) do
+    now_ms = state.now_fun.()
+
+    case Core.GroupOperationGuard.check(state.core.group_operation_guard, op, key, now_ms) do
+      {:allow, guard} ->
+        core = %{state.core | group_operation_guard: guard}
+        dispatch_event(state, :group_operation, %{count: 1}, %{outcome: :allow, op: op})
+        {:reply, {:allow, :ok}, schedule_persistence(%{state | core: core})}
+
+      {:deny, reason, retry_after_sec, guard} ->
+        core = %{state.core | group_operation_guard: guard}
+        dispatch_event(state, :group_operation, %{count: 1}, %{outcome: :deny, op: op})
+
+        decision = %{
+          reason: :group_operation_limit,
+          detail: reason,
+          retry_after_sec: retry_after_sec
+        }
+
+        {:reply, {:deny, decision}, schedule_persistence(%{state | core: core})}
+    end
+  end
+
+  def handle_call(:human_entropy_snapshot, _from, state),
+    do: {:reply, state.core.human_entropy, state}
 
   def handle_call(:stats, _from, state) do
     now_ms = state.now_fun.()
@@ -375,6 +431,11 @@ defmodule AmarulaAntiban.Session do
   def handle_cast({:presence_executed, plan}, state) do
     presence = Core.Presence.record_executed(state.core.presence, plan)
     {:noreply, schedule_persistence(%{state | core: %{state.core | presence: presence}})}
+  end
+
+  def handle_cast({:human_entropy_executed, actions}, state) do
+    entropy = Core.HumanEntropy.record_cycle(state.core.human_entropy, actions)
+    {:noreply, schedule_persistence(%{state | core: %{state.core | human_entropy: entropy}})}
   end
 
   @impl true
@@ -623,10 +684,12 @@ defmodule AmarulaAntiban.Session do
         {delay_ms, presence, plan} = presence_decision(core, recipient, content, delay_ms, now_ms)
         plan_delay_ms = Enum.sum(Enum.map(plan, &effect_delay/1))
         delay_ms = delay_ms + topology_delay_ms
+        {typo, legitimacy_signals} = maybe_inject_typo(core.legitimacy_signals, content)
 
         core = %{
           core
           | presence: presence,
+            legitimacy_signals: legitimacy_signals,
             total_delay_ms: core.total_delay_ms + delay_ms + plan_delay_ms
         }
 
@@ -634,10 +697,18 @@ defmodule AmarulaAntiban.Session do
           allowed: true,
           delay_ms: delay_ms,
           health: health_status,
-          presence_plan: plan
+          presence_plan: plan,
+          typo: typo
         }
 
         {{:allow, decision}, core, effects}
+    end
+  end
+
+  defp maybe_inject_typo(injector, content) do
+    case Core.LegitimacySignals.maybe_inject_typo(injector, content) do
+      {:none, injector} -> {nil, injector}
+      {:typo, typo, injector} -> {typo, injector}
     end
   end
 
@@ -1019,7 +1090,10 @@ defmodule AmarulaAntiban.Session do
       session_health: Core.SessionHealth.stats(core.session_health),
       jid_canonicalizer: Core.JidCanonicalizer.stats(core.jid_canonicalizer),
       topology_throttler: topology_throttler,
-      ban_recovery: Core.BanRecovery.status(core.ban_recovery, now_ms)
+      ban_recovery: Core.BanRecovery.status(core.ban_recovery, now_ms),
+      legitimacy_signals: Core.LegitimacySignals.stats(core.legitimacy_signals),
+      group_operation_guard: Core.GroupOperationGuard.stats(core.group_operation_guard),
+      human_entropy: Core.HumanEntropy.stats(core.human_entropy)
     }
 
     core = %{

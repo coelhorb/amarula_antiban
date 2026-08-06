@@ -30,6 +30,9 @@ defmodule AmarulaAntiban.State do
           read_receipt_variance: Core.ReadReceiptVariance.t(),
           topology_throttler: Core.TopologyThrottler.t(),
           ban_recovery: Core.BanRecovery.t(),
+          legitimacy_signals: Core.LegitimacySignals.t(),
+          group_operation_guard: Core.GroupOperationGuard.t(),
+          human_entropy: Core.HumanEntropy.t(),
           reservations: map(),
           messages_allowed: non_neg_integer(),
           messages_blocked: non_neg_integer(),
@@ -56,7 +59,10 @@ defmodule AmarulaAntiban.State do
     :content_variator,
     :read_receipt_variance,
     :topology_throttler,
-    :ban_recovery
+    :ban_recovery,
+    :legitimacy_signals,
+    :group_operation_guard,
+    :human_entropy
   ]
   defstruct @enforce_keys ++
               [reservations: %{}, messages_allowed: 0, messages_blocked: 0, total_delay_ms: 0]
@@ -96,7 +102,12 @@ defmodule AmarulaAntiban.State do
         Core.ReadReceiptVariance.new(with_rand(nested(options, :read_receipt_variance), rand_fun)),
       topology_throttler:
         Core.TopologyThrottler.new(nested(options, :topology_throttler), now_ms),
-      ban_recovery: Core.BanRecovery.new(nested(options, :ban_recovery))
+      ban_recovery: Core.BanRecovery.new(nested(options, :ban_recovery)),
+      legitimacy_signals:
+        Core.LegitimacySignals.new(with_rand(nested(options, :legitimacy_signals), rand_fun)),
+      group_operation_guard:
+        Core.GroupOperationGuard.new(nested(options, :group_operation_guard)),
+      human_entropy: Core.HumanEntropy.new(with_rand(nested(options, :human_entropy), rand_fun))
     }
   end
 

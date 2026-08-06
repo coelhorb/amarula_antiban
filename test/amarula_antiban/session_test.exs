@@ -356,6 +356,113 @@ defmodule AmarulaAntiban.SessionTest do
     assert Session.stats(session).total_delay_ms == 60_000
   end
 
+  test "decision.typo appears when the probability roll forces typo injection" do
+    session =
+      start_custom(
+        legitimacy_signals: [
+          enabled: true,
+          typo_probability: 1.0,
+          typo_correct_min_ms: 0,
+          typo_correct_max_ms: 0
+        ],
+        max_identical_messages: 10
+      )
+
+    assert {:allow, decision} = Session.before_send(session, jid(), "hello there my friend")
+
+    assert %{typo_text: typo_text, correction_delay_ms: 0, correction_text: correction} =
+             decision.typo
+
+    assert typo_text != "hello there my friend"
+    assert correction == "hello there my friend"
+    assert Session.stats(session).legitimacy_signals.typos_injected == 1
+  end
+
+  test "legitimacy_signals stays disabled by default" do
+    session = start_custom(max_identical_messages: 10)
+    assert {:allow, decision} = Session.before_send(session, jid(), "hello there my friend")
+    assert decision.typo == nil
+  end
+
+  test "group operation guard enforces its own fixed-window limit outside decide/4" do
+    session =
+      start_custom(
+        group_operation_guard: [
+          enabled: true,
+          limits: %{
+            add: %{max: 1, window_ms: 600_000},
+            remove: %{max: 1, window_ms: 600_000}
+          }
+        ]
+      )
+
+    group = "120000000000000000@g.us"
+
+    assert {:allow, :ok} = Session.check_group_operation(session, :add, group)
+    assert {:deny, decision} = Session.check_group_operation(session, :add, group)
+    assert decision.reason == :group_operation_limit
+    assert decision.retry_after_sec == 600
+    assert Session.stats(session).group_operation_guard.tracked_windows == 1
+
+    assert {:allow, :ok} = Session.check_group_operation(session, :remove, group)
+  end
+
+  test "record_incoming tracks the contact for human entropy" do
+    session = start_custom(human_entropy: [enabled: true])
+    assert :none = Session.record_incoming(session, jid())
+
+    snapshot = Session.human_entropy_snapshot(session)
+    assert [%{jid: contact_jid, last_message_at: @now}] = snapshot.recent_contacts
+    assert contact_jid == jid()
+  end
+
+  test "human_entropy_executed accounts for the reported actions" do
+    session = start_custom(human_entropy: [enabled: true])
+
+    :ok =
+      Session.human_entropy_executed(session, [
+        {:typing, jid(), 3_000},
+        {:presence_toggle, 30_000}
+      ])
+
+    assert Session.stats(session).human_entropy ==
+             %{cycles_run: 1, typing_events: 1, presence_toggles: 1}
+  end
+
+  test "group operation guard is disabled by default" do
+    session = start_custom([])
+    group = "120000000000000000@g.us"
+    assert {:allow, :ok} = Session.check_group_operation(session, :add, group)
+    assert {:allow, :ok} = Session.check_group_operation(session, :add, group)
+  end
+
+  test "group operation guard persists across a session restart", %{id: id} do
+    directory =
+      Path.join(System.tmp_dir!(), "antiban_group_op_#{System.unique_integer([:positive])}")
+
+    path = Path.join(directory, "state.json")
+    on_exit(fn -> File.rm_rf(directory) end)
+
+    group_options = [
+      persist: path,
+      group_operation_guard: [enabled: true, limits: %{add: %{max: 1, window_ms: 600_000}}]
+    ]
+
+    assert :ok = SessionSupervisor.stop_session(id)
+    {:ok, session} = SessionSupervisor.start_session(id, deterministic_options(id, group_options))
+
+    group = "120000000000000000@g.us"
+    assert {:allow, :ok} = Session.check_group_operation(session, :add, group)
+    assert :ok = Session.flush(session)
+    assert :ok = SessionSupervisor.stop_session(id)
+
+    {:ok, restarted} =
+      SessionSupervisor.start_session(id, deterministic_options(id, group_options))
+
+    assert {:deny, decision} = Session.check_group_operation(restarted, :add, group)
+    assert decision.reason == :group_operation_limit
+  end
+
   test "critical health risk auto-starts a soft_ban recovery pause" do
     session = start_custom([])
     assert :ok = Session.record_disconnect(session, 403)
