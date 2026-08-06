@@ -7,13 +7,13 @@ defmodule AmarulaAntiban.HumanEntropyWorker do
   makes sense to run while there is a real Amarula connection to act
   through, the same reasoning behind `EventBridge`'s lifecycle. Each cycle
   fetches a read-only snapshot of `Session`'s human-entropy core state,
-  decides actions with the pure `Core.HumanEntropy.roll_cycle/1`, executes
+  decides actions with the pure `Core.HumanEntropy.roll_cycle/2`, executes
   them directly against Amarula (best-effort, tolerating an unavailable
-  connection — same pattern `Plugin` already uses for presence steps),
-  reports the actions back to `Session` for accounting, then reschedules
-  itself with a fresh `Core.HumanEntropy.next_delay_ms/1` — a
-  self-rescheduling timer, not a fixed interval, matching upstream's
-  recursive `setTimeout`.
+  connection — same pattern `Plugin` already uses for presence steps;
+  `:read_receipt` actions call `Amarula.mark_read/3`), reports the actions
+  back to `Session` for accounting, then reschedules itself with a fresh
+  `Core.HumanEntropy.next_delay_ms/1` — a self-rescheduling timer, not a
+  fixed interval, matching upstream's recursive `setTimeout`.
   """
 
   use GenServer
@@ -58,7 +58,8 @@ defmodule AmarulaAntiban.HumanEntropyWorker do
     state = %{
       handle: Keyword.fetch!(options, :handle),
       conn: Keyword.fetch!(options, :conn),
-      sleep_fun: Keyword.get(options, :sleep_fun, &Process.sleep/1)
+      sleep_fun: Keyword.get(options, :sleep_fun, &Process.sleep/1),
+      now_fun: Keyword.get(options, :now_fun, fn -> System.system_time(:millisecond) end)
     }
 
     {:ok, state, {:continue, :run_cycle}}
@@ -91,7 +92,7 @@ defmodule AmarulaAntiban.HumanEntropyWorker do
 
   defp run_cycle(state) do
     entropy = fetch_snapshot(state)
-    actions = HumanEntropy.roll_cycle(entropy)
+    actions = HumanEntropy.roll_cycle(entropy, state.now_fun.())
     execute_actions(state, actions)
     report(state, actions)
     Process.send_after(self(), :run_cycle, HumanEntropy.next_delay_ms(entropy))
@@ -125,6 +126,12 @@ defmodule AmarulaAntiban.HumanEntropyWorker do
     best_effort(pid, fn -> Amarula.set_presence(pid, :unavailable) end)
     state.sleep_fun.(duration_ms)
     best_effort(pid, fn -> Amarula.set_presence(pid, :available) end)
+  end
+
+  defp execute_action(state, {:read_receipt, jid, message_ids, duration_ms}) do
+    pid = presence_pid(state.conn)
+    state.sleep_fun.(duration_ms)
+    best_effort(pid, fn -> Amarula.mark_read(pid, jid, message_ids) end)
   end
 
   defp presence_pid(conn) do

@@ -83,7 +83,7 @@ defmodule AmarulaAntiban.HumanEntropyWorkerTest do
 
     assert eventually(fn ->
              Session.stats(session).human_entropy ==
-               %{cycles_run: 1, typing_events: 1, presence_toggles: 1}
+               %{cycles_run: 1, typing_events: 1, presence_toggles: 1, read_receipts_sent: 0}
            end)
 
     send(worker, :run_cycle)
@@ -93,8 +93,72 @@ defmodule AmarulaAntiban.HumanEntropyWorkerTest do
 
     assert eventually(fn ->
              Session.stats(session).human_entropy ==
-               %{cycles_run: 2, typing_events: 2, presence_toggles: 2}
+               %{cycles_run: 2, typing_events: 2, presence_toggles: 2, read_receipts_sent: 0}
            end)
+  end
+
+  test "runs a read_receipt action for a contact with a pending message id" do
+    test_pid = self()
+    unique = System.unique_integer([:positive])
+    profile = "antiban_human_entropy_read_#{unique}"
+    root = Path.join(System.tmp_dir!(), profile)
+
+    auth =
+      AuthUtils.init_auth_creds()
+      |> Map.put(:me, %{
+        id: "10000000006@s.whatsapp.net",
+        lid: nil,
+        name: "Antiban Entropy Read Test"
+      })
+
+    options = [
+      rand_fun: fn -> 0.0 end,
+      auto_pause_at: :critical,
+      human_entropy: [
+        enabled: true,
+        typing_probability: 0.0,
+        presence_toggle_probability: 0.0,
+        read_receipt_probability: 1.0,
+        min_interval_ms: 300_000,
+        max_interval_ms: 300_000
+      ],
+      read_receipt_variance: [mean_ms: 3, std_dev_ms: 0, min_ms: 3, max_ms: 3],
+      sleep_fun: fn milliseconds -> send(test_pid, {:human_sleep, milliseconds}) end
+    ]
+
+    {:ok, session} = SessionSupervisor.start_session(profile, options)
+    assert :none = Session.record_incoming(session, jid(), "hi", "MSG1")
+
+    conn =
+      Amarula.new(%{
+        profile: profile,
+        storage: {Amarula.Storage.File, root: root},
+        connection_state: :connected,
+        frame_sink: test_pid,
+        offline: true,
+        auth: auth,
+        max_retries: 1,
+        retry_delay: 10
+      })
+      |> Plugin.attach(options)
+
+    {:ok, pid} = Amarula.connect(conn, parent_pid: test_pid)
+
+    on_exit(fn ->
+      Amarula.stop(pid)
+      SessionSupervisor.stop_session(profile)
+      File.rm_rf(root)
+    end)
+
+    assert is_pid(HumanEntropyWorker.whereis(profile))
+    assert_receive {:human_sleep, 3}, 1_000
+
+    assert eventually(fn ->
+             Session.stats(session).human_entropy.read_receipts_sent == 1
+           end)
+
+    snapshot = Session.human_entropy_snapshot(session)
+    assert [%{pending_message_ids: []}] = snapshot.recent_contacts
   end
 
   test "no worker is started when human_entropy is disabled" do

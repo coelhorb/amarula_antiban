@@ -384,6 +384,28 @@ defmodule AmarulaAntiban.SessionTest do
     assert decision.typo == nil
   end
 
+  test "content_variator varies outbound text and feeds typo injection the varied text" do
+    session =
+      start_custom(
+        content_variator: [enabled: true, zero_width_chars: false],
+        legitimacy_signals: [enabled: true, typo_probability: 1.0],
+        max_identical_messages: 10
+      )
+
+    assert {:allow, decision} = Session.before_send(session, jid(), "hello world")
+    assert decision.varied_content == "hello world  "
+    assert %{typo_text: typo_text, correction_text: correction} = decision.typo
+    assert typo_text != "hello world"
+    assert typo_text != decision.varied_content
+    assert correction == decision.varied_content
+  end
+
+  test "content_variator stays disabled by default" do
+    session = start_custom(max_identical_messages: 10)
+    assert {:allow, decision} = Session.before_send(session, jid(), "hello world")
+    assert decision.varied_content == nil
+  end
+
   test "group operation guard enforces its own fixed-window limit outside decide/4" do
     session =
       start_custom(
@@ -416,6 +438,15 @@ defmodule AmarulaAntiban.SessionTest do
     assert contact_jid == jid()
   end
 
+  test "record_incoming/4 queues the message id as owed a human-entropy read receipt" do
+    session = start_custom(human_entropy: [enabled: true])
+    assert :none = Session.record_incoming(session, jid(), "hi", "INCOMING_ID")
+
+    snapshot = Session.human_entropy_snapshot(session)
+    assert [%{jid: contact_jid, pending_message_ids: ["INCOMING_ID"]}] = snapshot.recent_contacts
+    assert contact_jid == jid()
+  end
+
   test "human_entropy_executed accounts for the reported actions" do
     session = start_custom(human_entropy: [enabled: true])
 
@@ -426,7 +457,7 @@ defmodule AmarulaAntiban.SessionTest do
       ])
 
     assert Session.stats(session).human_entropy ==
-             %{cycles_run: 1, typing_events: 1, presence_toggles: 1}
+             %{cycles_run: 1, typing_events: 1, presence_toggles: 1, read_receipts_sent: 0}
   end
 
   test "group operation guard is disabled by default" do
@@ -434,6 +465,44 @@ defmodule AmarulaAntiban.SessionTest do
     group = "120000000000000000@g.us"
     assert {:allow, :ok} = Session.check_group_operation(session, :add, group)
     assert {:allow, :ok} = Session.check_group_operation(session, :add, group)
+  end
+
+  test "typed send: register, prepare, and record outside the on_send pipeline", %{
+    session: session
+  } do
+    assert {:error, {:type_not_registered, "otp"}} =
+             Session.prepare_typed_send(session, jid(), %{text: "your code is 1234"}, "otp")
+
+    assert :ok =
+             Session.register_message_type(session, "otp",
+               priority: :critical,
+               rate_limit_pool: "otp_pool"
+             )
+
+    assert {:ok, prepared} =
+             Session.prepare_typed_send(session, jid(), %{text: "your code is 1234"}, "otp")
+
+    assert prepared.type == "otp"
+    assert prepared.jid == jid()
+
+    assert :ok = Session.record_typed_send(session, prepared, "wamid.typed")
+    assert Session.message_type_stats(session, "otp").sent == 1
+    assert Session.stats(session).message_type_registry.registered_types == 1
+  end
+
+  test "typed send: re-registering an unlocked type is allowed, a locked one is rejected", %{
+    session: session
+  } do
+    assert :ok = Session.register_message_type(session, "reply", priority: :normal)
+    assert :ok = Session.register_message_type(session, "reply", priority: :bulk)
+
+    assert {:ok, prepared} =
+             Session.prepare_typed_send(session, jid(), %{text: "hi"}, "reply")
+
+    assert :ok = Session.record_typed_send(session, prepared)
+
+    assert {:error, :type_locked} =
+             Session.register_message_type(session, "reply", priority: :critical)
   end
 
   test "group operation guard persists across a session restart", %{id: id} do

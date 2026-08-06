@@ -50,6 +50,18 @@ defmodule AmarulaAntiban.FacadeTest do
     assert {:allow, :ok} =
              AmarulaAntiban.check_group_operation(session, :add, "120000@g.us")
 
+    assert :ok = AmarulaAntiban.register_message_type(session, "reply", priority: :normal)
+
+    assert {:ok, prepared} =
+             AmarulaAntiban.prepare_typed_send(
+               session,
+               "1@s.whatsapp.net",
+               %{text: "hi"},
+               "reply"
+             )
+
+    assert :ok = AmarulaAntiban.record_typed_send(session, prepared, "wamid.typed")
+
     assert :ok = AmarulaAntiban.stop_session(id)
   end
 end

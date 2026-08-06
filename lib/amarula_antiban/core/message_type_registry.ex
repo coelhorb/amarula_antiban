@@ -327,6 +327,20 @@ defmodule AmarulaAntiban.Core.MessageTypeRegistry do
   @spec get_stats(t(), String.t()) :: Stats.t() | nil
   def get_stats(%__MODULE__{} = registry, type), do: Map.get(registry.stats, type)
 
+  @doc "Returns lightweight registry-wide counts for observability."
+  @spec overview(t()) :: %{
+          registered_types: non_neg_integer(),
+          locked_types: non_neg_integer(),
+          pending_messages: non_neg_integer()
+        }
+  def overview(%__MODULE__{} = registry) do
+    %{
+      registered_types: map_size(registry.types),
+      locked_types: MapSet.size(registry.locked),
+      pending_messages: map_size(registry.pending_messages)
+    }
+  end
+
   @doc """
   Returns warning-only policy signals and the state with warning timestamps.
 

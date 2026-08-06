@@ -4,6 +4,7 @@ defmodule AmarulaAntiban.Core.ContentVariator do
   defmodule Config do
     @moduledoc false
     @type t :: %__MODULE__{
+            enabled: boolean(),
             zero_width_chars: boolean(),
             punctuation_variation: boolean(),
             emoji_padding: boolean(),
@@ -11,7 +12,8 @@ defmodule AmarulaAntiban.Core.ContentVariator do
             custom_variator: (String.t(), pos_integer() -> String.t()) | nil,
             rand_fun: (-> float())
           }
-    defstruct zero_width_chars: true,
+    defstruct enabled: false,
+              zero_width_chars: true,
               punctuation_variation: true,
               emoji_padding: false,
               synonyms: false,
@@ -48,8 +50,14 @@ defmodule AmarulaAntiban.Core.ContentVariator do
   @spec new(keyword() | map()) :: t()
   def new(options \\ []), do: %__MODULE__{config: struct!(Config, Map.new(options))}
 
+  @doc "Returns the number of variations produced so far."
+  @spec stats(t()) :: %{variations_applied: non_neg_integer()}
+  def stats(variator), do: %{variations_applied: variator.counter}
+
   @doc "Returns one varied string and the advanced counter state."
   @spec vary(t(), String.t()) :: {String.t(), t()}
+  def vary(%__MODULE__{config: %{enabled: false}} = variator, text), do: {text, variator}
+
   def vary(variator, text) do
     variator = %{variator | counter: variator.counter + 1}
     config = variator.config

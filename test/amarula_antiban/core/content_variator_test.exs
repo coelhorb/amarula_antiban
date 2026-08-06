@@ -2,8 +2,18 @@ defmodule AmarulaAntiban.Core.ContentVariatorTest do
   use ExUnit.Case, async: true
   alias AmarulaAntiban.Core.ContentVariator
 
+  test "disabled variator returns text unchanged" do
+    state = ContentVariator.new()
+    assert {"hello", ^state} = ContentVariator.vary(state, "hello")
+  end
+
   test "uses custom variator with advancing index" do
-    state = ContentVariator.new(custom_variator: fn text, index -> "#{text}-#{index}" end)
+    state =
+      ContentVariator.new(
+        enabled: true,
+        custom_variator: fn text, index -> "#{text}-#{index}" end
+      )
+
     assert {"hello-1", state} = ContentVariator.vary(state, "hello")
     assert {"hello-2", _} = ContentVariator.vary(state, "hello")
   end
@@ -17,7 +27,7 @@ defmodule AmarulaAntiban.Core.ContentVariatorTest do
       value
     end
 
-    state = ContentVariator.new(punctuation_variation: false, rand_fun: random)
+    state = ContentVariator.new(enabled: true, punctuation_variation: false, rand_fun: random)
     assert {value, _} = ContentVariator.vary(state, "one two three")
     assert value != "one two three"
   end
@@ -33,6 +43,7 @@ defmodule AmarulaAntiban.Core.ContentVariatorTest do
 
     state =
       ContentVariator.new(
+        enabled: true,
         zero_width_chars: false,
         synonyms: true,
         emoji_padding: true,
@@ -44,7 +55,11 @@ defmodule AmarulaAntiban.Core.ContentVariatorTest do
     assert String.ends_with?(value, "👍")
 
     {bulk, _} =
-      ContentVariator.vary_bulk(ContentVariator.new(zero_width_chars: false), "hello", 3)
+      ContentVariator.vary_bulk(
+        ContentVariator.new(enabled: true, zero_width_chars: false),
+        "hello",
+        3
+      )
 
     assert length(bulk) == 3
   end

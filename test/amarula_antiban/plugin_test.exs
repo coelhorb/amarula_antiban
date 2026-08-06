@@ -204,6 +204,57 @@ defmodule AmarulaAntiban.PluginTest do
     assert_receive {:slept, 5}, 1_000
   end
 
+  test "content variation mutates ctx.message before the send pipeline continues" do
+    test_pid = self()
+    unique = System.unique_integer([:positive])
+    profile = "antiban_plugin_variator_#{unique}"
+    root = Path.join(System.tmp_dir!(), profile)
+
+    auth =
+      AuthUtils.init_auth_creds()
+      |> Map.put(:me, %{
+        id: "10000000005@s.whatsapp.net",
+        lid: nil,
+        name: "Antiban Variator Test"
+      })
+
+    conn =
+      Amarula.new(%{
+        profile: profile,
+        storage: {Amarula.Storage.File, root: root},
+        connection_state: :connected,
+        frame_sink: test_pid,
+        offline: true,
+        auth: auth,
+        max_retries: 1,
+        retry_delay: 10
+      })
+      |> Plugin.attach(
+        rand_fun: fn -> 0.5 end,
+        min_delay_ms: 0,
+        max_delay_ms: 0,
+        new_chat_delay_ms: 0,
+        max_identical_messages: 10,
+        auto_pause_at: :critical,
+        content_variator: [enabled: true, zero_width_chars: false]
+      )
+
+    {:ok, pid} = Amarula.connect(conn, parent_pid: test_pid)
+
+    on_exit(fn ->
+      Amarula.stop(pid)
+      SessionSupervisor.stop_session(profile)
+      File.rm_rf(root)
+    end)
+
+    ctx = send_ctx(conn, profile, "wamid.variator", "hello world")
+    step = List.last(conn.send_steps)
+
+    assert {:cont, mutated} = step.(ctx)
+    assert %Proto.Message{conversation: "hello world  "} = mutated.message
+    refute mutated == ctx
+  end
+
   test "receive step ignores bare sender-key and protocol control frames", context do
     step = List.last(context.conn.recv_steps)
 

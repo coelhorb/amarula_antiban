@@ -25,6 +25,25 @@ defmodule AmarulaAntiban.Core.MessageTypeRegistryTest do
     {prepared, registry}
   end
 
+  test "overview counts registered types, locked types, and pending messages" do
+    registry = registry() |> register!("otp", priority: :critical)
+
+    assert MessageTypeRegistry.overview(registry) == %{
+             registered_types: 1,
+             locked_types: 0,
+             pending_messages: 0
+           }
+
+    {prepared, registry} = prepare!(registry, "1@s.whatsapp.net", %{}, type: "otp")
+    registry = MessageTypeRegistry.record_sent(registry, prepared, "wamid.1", @now)
+
+    assert MessageTypeRegistry.overview(registry) == %{
+             registered_types: 1,
+             locked_types: 1,
+             pending_messages: 1
+           }
+  end
+
   test "default RNG and injected endpoints honor the upstream [0, 1) domain" do
     assert :erlang.fun_info(%MessageTypeRegistry{}.rand_fun, :name) ==
              {:name, :uniform_real}

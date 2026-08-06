@@ -27,7 +27,6 @@ defmodule AmarulaAntiban.State do
           jid_canonicalizer: Core.JidCanonicalizer.t(),
           message_type_registry: Core.MessageTypeRegistry.t(),
           content_variator: Core.ContentVariator.t(),
-          read_receipt_variance: Core.ReadReceiptVariance.t(),
           topology_throttler: Core.TopologyThrottler.t(),
           ban_recovery: Core.BanRecovery.t(),
           legitimacy_signals: Core.LegitimacySignals.t(),
@@ -57,7 +56,6 @@ defmodule AmarulaAntiban.State do
     :jid_canonicalizer,
     :message_type_registry,
     :content_variator,
-    :read_receipt_variance,
     :topology_throttler,
     :ban_recovery,
     :legitimacy_signals,
@@ -98,8 +96,6 @@ defmodule AmarulaAntiban.State do
       message_type_registry: Core.MessageTypeRegistry.new(rand_fun: rand_fun),
       content_variator:
         Core.ContentVariator.new(with_rand(nested(options, :content_variator), rand_fun)),
-      read_receipt_variance:
-        Core.ReadReceiptVariance.new(with_rand(nested(options, :read_receipt_variance), rand_fun)),
       topology_throttler:
         Core.TopologyThrottler.new(nested(options, :topology_throttler), now_ms),
       ban_recovery: Core.BanRecovery.new(nested(options, :ban_recovery)),
@@ -107,7 +103,11 @@ defmodule AmarulaAntiban.State do
         Core.LegitimacySignals.new(with_rand(nested(options, :legitimacy_signals), rand_fun)),
       group_operation_guard:
         Core.GroupOperationGuard.new(nested(options, :group_operation_guard)),
-      human_entropy: Core.HumanEntropy.new(with_rand(nested(options, :human_entropy), rand_fun))
+      human_entropy:
+        Core.HumanEntropy.new(
+          with_rand(nested(options, :human_entropy), rand_fun),
+          with_rand(nested(options, :read_receipt_variance), rand_fun)
+        )
     }
   end
 

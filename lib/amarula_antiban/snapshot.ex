@@ -41,7 +41,7 @@ defmodule AmarulaAntiban.Snapshot do
       ban_recovery: Core.BanRecovery.export(state.ban_recovery),
       legitimacy_signals: mutable_data(state.legitimacy_signals),
       group_operation_guard: Core.GroupOperationGuard.export(state.group_operation_guard),
-      human_entropy: mutable_data(state.human_entropy),
+      human_entropy: Core.HumanEntropy.export(state.human_entropy),
       reservations: state.reservations,
       counters: %{
         messages_allowed: state.messages_allowed,
@@ -179,7 +179,7 @@ defmodule AmarulaAntiban.Snapshot do
     )
     |> Map.put(
       :human_entropy,
-      restore_struct(fresh.human_entropy, value(payload, :human_entropy))
+      restore_human_entropy(fresh.human_entropy, value(payload, :human_entropy))
     )
     |> Map.put(:reservations, value(payload, :reservations, %{}))
     |> restore_counters(value(payload, :counters, %{}))
@@ -203,6 +203,9 @@ defmodule AmarulaAntiban.Snapshot do
 
   defp restore_group_operation_guard(guard, data),
     do: Core.GroupOperationGuard.restore(guard, data)
+
+  defp restore_human_entropy(entropy, nil), do: entropy
+  defp restore_human_entropy(entropy, data), do: Core.HumanEntropy.restore(entropy, data)
 
   defp restore_rate_limiter(limiter, data) do
     data = data || %{}

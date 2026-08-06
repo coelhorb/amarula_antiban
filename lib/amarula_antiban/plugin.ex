@@ -80,7 +80,12 @@ defmodule AmarulaAntiban.Plugin do
             sleep(delay(decision.delay_ms), sleep_fun)
             execute_presence(conn, recipient, decision.presence_plan, sleep_fun)
             record_presence(handle, decision.presence_plan)
-            ctx = apply_typo(conn, recipient, ctx, message, decision.typo, sleep_fun)
+
+            ctx =
+              ctx
+              |> apply_varied_content(decision.varied_content)
+              |> apply_typo(conn, recipient, decision.typo, sleep_fun)
+
             {:cont, ctx}
 
           {:deny, decision} ->
@@ -92,11 +97,24 @@ defmodule AmarulaAntiban.Plugin do
     end
   end
 
-  defp apply_typo(_conn, _recipient, ctx, _message, nil, _sleep_fun), do: ctx
+  defp apply_varied_content(ctx, nil), do: ctx
 
-  defp apply_typo(conn, recipient, ctx, message, %{typo_text: typo_text} = typo, sleep_fun) do
-    case with_typo_text(message, typo_text) do
-      ^message ->
+  defp apply_varied_content(ctx, varied_text) do
+    original = ctx.message
+
+    case with_text(original, varied_text) do
+      ^original -> ctx
+      mutated -> %{ctx | message: mutated}
+    end
+  end
+
+  defp apply_typo(ctx, _conn, _recipient, nil, _sleep_fun), do: ctx
+
+  defp apply_typo(ctx, conn, recipient, %{typo_text: typo_text} = typo, sleep_fun) do
+    original = ctx.message
+
+    case with_text(original, typo_text) do
+      ^original ->
         ctx
 
       mutated ->
@@ -105,19 +123,19 @@ defmodule AmarulaAntiban.Plugin do
     end
   end
 
-  defp with_typo_text(message, typo_text) do
+  defp with_text(message, text) do
     cond do
       is_binary(field(message, :conversation)) ->
-        Map.put(message, :conversation, typo_text)
+        Map.put(message, :conversation, text)
 
       is_binary(field(field(message, :extendedTextMessage), :text)) ->
-        Map.update!(message, :extendedTextMessage, &Map.put(&1, :text, typo_text))
+        Map.update!(message, :extendedTextMessage, &Map.put(&1, :text, text))
 
       is_binary(field(field(message, :imageMessage), :caption)) ->
-        Map.update!(message, :imageMessage, &Map.put(&1, :caption, typo_text))
+        Map.update!(message, :imageMessage, &Map.put(&1, :caption, text))
 
       is_binary(field(field(message, :videoMessage), :caption)) ->
-        Map.update!(message, :videoMessage, &Map.put(&1, :caption, typo_text))
+        Map.update!(message, :videoMessage, &Map.put(&1, :caption, text))
 
       true ->
         message
@@ -156,12 +174,12 @@ defmodule AmarulaAntiban.Plugin do
 
   defp receive_step(%SessionHandle{} = handle) do
     fn
-      %{from: sender, id: _id, profile: _profile, message: message} = ctx ->
+      %{from: sender, id: id, profile: _profile, message: message} = ctx ->
         unless control_frame?(message) do
           _suggestion =
             SessionSupervisor.with_session(
               handle,
-              &Session.record_incoming(&1, sender, message_content(message))
+              &Session.record_incoming(&1, sender, message_content(message), id)
             )
         end
 

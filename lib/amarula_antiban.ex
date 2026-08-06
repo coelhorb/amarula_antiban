@@ -9,6 +9,7 @@ defmodule AmarulaAntiban do
   """
 
   alias AmarulaAntiban.Core.GroupOperationGuard
+  alias AmarulaAntiban.Core.MessageTypeRegistry
   alias AmarulaAntiban.EventBridgeSupervisor
   alias AmarulaAntiban.Plugin
   alias AmarulaAntiban.Session
@@ -65,6 +66,53 @@ defmodule AmarulaAntiban do
           {:allow, :ok} | {:deny, map()}
   def check_group_operation(session, op, key),
     do: with_session(session, &Session.check_group_operation(&1, op, key))
+
+  @doc "Registers a named message-type definition. See `Session.register_message_type/3`."
+  @spec register_message_type(
+          Session.server() | SessionHandle.t() | term(),
+          String.t(),
+          MessageTypeRegistry.Definition.t() | keyword() | map()
+        ) :: :ok | {:error, :type_locked | :invalid_definition}
+  def register_message_type(session, name, definition),
+    do: with_session(session, &Session.register_message_type(&1, name, definition))
+
+  @doc """
+  Validates a typed send and reserves its rate-limit pool slot ahead of an
+  Amarula transport call:
+
+      :ok = AmarulaAntiban.register_message_type(session, "otp", priority: :critical)
+
+      case AmarulaAntiban.prepare_typed_send(session, jid, content, "otp") do
+        {:ok, prepared} ->
+          {:ok, msg_id} = Amarula.send_text(conn, jid, content)
+          AmarulaAntiban.record_typed_send(session, prepared, msg_id)
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+
+  See `Session.prepare_typed_send/5`.
+  """
+  @spec prepare_typed_send(
+          Session.server() | SessionHandle.t() | term(),
+          String.t(),
+          term(),
+          String.t(),
+          keyword()
+        ) ::
+          {:ok, MessageTypeRegistry.PreparedSend.t()}
+          | {:error, MessageTypeRegistry.error_reason()}
+  def prepare_typed_send(session, recipient, content, type, opts \\ []),
+    do: with_session(session, &Session.prepare_typed_send(&1, recipient, content, type, opts))
+
+  @doc "Records a successful typed send. See `Session.record_typed_send/3`."
+  @spec record_typed_send(
+          Session.server() | SessionHandle.t() | term(),
+          MessageTypeRegistry.PreparedSend.t(),
+          String.t() | nil
+        ) :: :ok
+  def record_typed_send(session, prepared, message_id \\ nil),
+    do: with_session(session, &Session.record_typed_send(&1, prepared, message_id))
 
   @doc """
   Feeds public Amarula events into a session.

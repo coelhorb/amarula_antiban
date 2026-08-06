@@ -31,32 +31,21 @@ Ported in the second scaffolding pass, also before this document existed.
 | Elixir module | What it does | Fidelity notes |
 |---|---|---|
 | `Core.ContactGraph` | Per-contact handshake state machine (`:stranger -> :handshake_sent -> :handshake_complete -> :known`) plus a group "lurk period" before a newly-joined group may be messaged, and a daily new-stranger cap. | Moduledoc: "mirrors the upstream progression" for the four-state machine. Group hotspot/mutual-group signals are out of scope here (see `TopologyThrottler` in W4, which explicitly documents that gap). |
-| `Core.ContentVariator` | Zero-width-character insertion, punctuation cycling, emoji padding, and synonym substitution to avoid sending byte-identical repeated messages. | **Not wired into the send path.** `state.ex` constructs one per session and `Snapshot` persists its counter, but grepping `session.ex`/`plugin.ex` turns up no call to `vary/2` or `vary_bulk/3` anywhere — no outbound message is ever actually varied today. The module and its 3 tests are correct in isolation; it just isn't reachable from a real send yet. |
+| `Core.ContentVariator` | Zero-width-character insertion, punctuation cycling, emoji padding, and synonym substitution to avoid sending byte-identical repeated messages. | Was unreachable from any real send when this note was first written — see W8, which wired it into `Session.decide_rate`/`Plugin.send_step` (opt-in, `enabled: false` by default, a field this module didn't originally have) and gave it a `stats/1` accessor. |
 | `Core.DeafSession` | Detects a connected session that stops receiving any message activity for `timeout_ms` after `min_uptime_ms`, recommending a reconnect. | Small, self-contained pure detector; no explicit upstream-fidelity claim in its own docs to quote. |
 | `Core.DeliveryTracker` | Tracks sent-vs-delivered ratio in a rolling window keyed by Amarula message ID; emits `{:low_delivery_rate, rate}` at most once/hour when the rate drops under `low_rate_threshold` with enough samples. | No explicit upstream-fidelity claim to quote; wired into `Session`'s receipt handling (`record_receipts/4`) and surfaced in `Session.stats/1`. |
 | `Core.Disconnect` | Classifies a WhatsApp disconnect status code into `:fatal/:recoverable/:rate_limited/:unknown` with a reconnect recommendation and backoff. | Moduledoc: "Classifies a disconnect code using upstream numbers and Amarula's 515 lifecycle" — codes 401/405/409/412/428/429/500/503/1000 use what the module calls upstream's numbers; 515 is an **intentional, documented Amarula divergence**: "the normal post-pairing restart protocol... Treating it as fatal would fight the host lifecycle and incorrectly require a new QR code," so it's classified `:recoverable` here instead of however upstream (which has no Amarula-specific restart lifecycle) would classify it. |
 | `Core.JidCircuitBreaker` | Per-recipient closed/open/half-open circuit breaker (fails closed after `failure_threshold`, cools down, then allows exactly one half-open probe) plus a broadcast-jitter helper. | Its own comment flags a **documented upstream bug this port fixes**: on the open→half-open transition, "The upstream implementation forgot to mark [the probe] used here, contradicting its own test and contract" — this port marks the transition itself as the consumed probe, matching upstream's *stated* contract rather than its actual (buggy) behavior. |
-| `Core.Presence` | The most detailed module in this tier: circadian activity curves (`:office/:social/:global`) with per-hour multipliers, a piecewise circadian delay multiplier by profile (`:night_owl/:early_bird/:always_on/:default`), a WPM-based Gaussian typing-time model chunked into typing/think-pause steps, distraction pauses, offline gaps, and read-receipt delay/skip rolls. | No single "matches upstream" line in its moduledoc, but the sheer specificity of the curve tables and the piecewise multiplier formula (distinct constants for each hour band) reads as a faithful constants-for-constants port rather than a reinterpretation — not independently re-verified against source in this pass. Its own `read_receipt/2` duplicates what `Core.ReadReceiptVariance` (below) was apparently meant to do. |
-| `Core.ReadReceiptVariance` | A standalone Gaussian read-receipt delay calculator (clamped `mean_ms ± std_dev_ms`) plus a "backlog" check to skip delaying receipts for old messages. | **Not wired anywhere.** `state.ex` is the *only* other file that references this module in the whole codebase — no call in `session.ex`, and it isn't even in `Snapshot`'s export/restore payload (unlike `ContentVariator`, which is at least persisted). `Core.Presence.read_receipt/2` independently reimplements the same kind of Gaussian-delay decision inline. This looks like an earlier, superseded module that was never removed once `Presence` grew its own read-receipt logic — worth a decision (wire it, or delete it) rather than leaving it silently inert. |
+| `Core.Presence` | The most detailed module in this tier: circadian activity curves (`:office/:social/:global`) with per-hour multipliers, a piecewise circadian delay multiplier by profile (`:night_owl/:early_bird/:always_on/:default`), a WPM-based Gaussian typing-time model chunked into typing/think-pause steps, distraction pauses, offline gaps, and read-receipt delay/skip rolls. | No single "matches upstream" line in its moduledoc, but the sheer specificity of the curve tables and the piecewise multiplier formula (distinct constants for each hour band) reads as a faithful constants-for-constants port rather than a reinterpretation — not independently re-verified against source in this pass. Its own `read_receipt/2` remains unused; `Core.ReadReceiptVariance` (below) is the one actually wired, into `HumanEntropy` (see W7/W8) rather than into `Presence`'s own send-time flow. |
+| `Core.ReadReceiptVariance` | A standalone Gaussian read-receipt delay calculator (clamped `mean_ms ± std_dev_ms`) plus a "backlog" check to skip delaying receipts for old messages. | Was unreachable from anywhere in the codebase when this note was first written — see W8, which made it a nested component of `Core.HumanEntropy` (owning the delay for its `:read_receipt` action) rather than a standalone `State` field, closing the `performReadReceipt` gap noted in W7. |
 | `Core.ReconnectThrottle` | Post-reconnect send-rate ramp: starts at `initial_rate_multiplier`, steps up over `ramp_steps` across `ramp_duration_ms` to full rate, gating sends against a one-minute rolling budget while ramping. | No explicit upstream-fidelity claim to quote; wired into `Session.decide_reconnect/7`, between the topology and group-profile guards. |
 | `Core.ReplyRatio` | Per-contact (or global) sent/received ratio floor with a cooldown on violation, plus an optional auto-reply-template suggestion on inbound messages. | Moduledoc: "The guard is opt-in, matching the upstream default" (`enabled: false`). |
 | `Core.RetryTracker` | Manual/analytical retry bookkeeping by reason code (bad-mac, no-session, timeout, etc.), spiral detection (`spiral_threshold`), and retry-limit-reached/-exceeded effects. | Moduledoc is explicit about scope: "Amarula owns protocol retry caching and resend. This module retains the upstream antiban statistics as a manual API... It never claims to stop, resend, or otherwise control Amarula's transport." Classification text-matching (`"bad mac"`, `"no session"`, etc.) is a plausible but not independently re-verified port of upstream's own string patterns. |
 | `Core.SessionHealth` | Bad-MAC sliding-window monitor: counts decrypt failures marked `bad_mac?`, flags the session `:degraded` at `bad_mac_threshold` within `bad_mac_window_ms`, recovers once the window clears. | No explicit upstream-fidelity claim to quote; small, self-contained. |
 
-Two more modules share `ContentVariator`'s and `ReadReceiptVariance`'s problem
-of being real, tested, and *unreachable*: **`Core.MessageTypeRegistry`'s send
-side.** The W3 entry below describes it as "Full, OTP-native," which is true
-of the module in isolation, but only its *receive* side
-(`record_read/2`/`record_delivered/2`, called from `Session`'s receipt
-handler) is actually wired up. `prepare_send/5` and `record_sent/4` — the
-functions that would register a message before it goes out, which is what
-`priority pool limits`/`pending tracking`/`legitimacy validation` are *for* —
-are never called from `session.ex` or `plugin.ex`, and there's no
-`Session`/facade delegate for them either (unlike `GroupOperationGuard.check/4`,
-which has an equivalent manual API deliberately exposed through
-`Session.check_group_operation/3`). Until that's wired up, receipts arrive for
-message IDs the registry never registered, so registration locking and
-priority-pool gating don't actually gate anything today.
+When this section was first written, `Core.MessageTypeRegistry`'s send side
+had the same problem: real, tested, and unreachable. See W8, which wired all
+three of these gaps in one pass.
 
 ## W3 — LID, JID, retry reasons, and message types
 
@@ -66,7 +55,7 @@ priority-pool gating don't actually gate anything today.
 | `lidFirstResolver.ts` | Amarula LID/PN APIs | Delegated to Amarula | Importing Baileys `lid-mapping-*_reverse.json` auth files does not apply to Amarula storage. Amarula's mapping store and contacts lookup own this function. |
 | `jidCanonicalizer.ts` | `AmarulaAntiban.Core.JidCanonicalizer` | Partial by design (D14) | Ports stable `canonical_key/3` behavior and hit/miss statistics only. For an `@lid`, the PN is supplied by the caller after an Amarula lookup and is never retained locally. Outbound target rewriting and event-based identity learning remain delegated to Amarula. |
 | `retryReason.ts` | `AmarulaAntiban.Core.RetryReason` | Full | Preserves codes `0, 1, 3, 4, 5, 7, 8, 9`, the four-code MAC set, parsing, and descriptions. Amarula still owns retry transport/re-encryption. |
-| `messageTypeRegistry.ts` | `AmarulaAntiban.Core.MessageTypeRegistry` | Full module, **half wired** | Preserves registration locking, provenance and legitimacy validation, priority pool limits, pending tracking, engagement scoring, warnings, cleanup, and export/import — as a module, in isolation, this is a complete port. The TypeScript `send()` I/O is split into pure `prepare_send/5` and `record_sent/4`, intended for Amarula to perform transport between them, but **neither is actually called** from `session.ex`/`plugin.ex` today, and there's no `Session`/facade delegate for them (see the W1/W2 section above for the full explanation). Only the receive side (`record_read/2`/`record_delivered/2`) is wired into `Session`'s receipt handler. Clock and RNG are injected. |
+| `messageTypeRegistry.ts` | `AmarulaAntiban.Core.MessageTypeRegistry` | Full, OTP-native | Preserves registration locking, provenance and legitimacy validation, priority pool limits, pending tracking, engagement scoring, warnings, cleanup, and export/import. The TypeScript `send()` I/O is split into pure `prepare_send/5` and `record_sent/4`; Amarula performs transport between them. Clock and RNG are injected. Its send side was unreachable from `session.ex`/`plugin.ex` when this note was first written (only the receive side, `record_read/2`/`record_delivered/2`, was wired) — see W8, which gave it a standalone `Session`/facade API (`register_message_type/3`, `prepare_typed_send/5`, `record_typed_send/3`), the same shape as `GroupOperationGuard.check_group_operation/3`. |
 
 `MessageTypeRegistry` intentionally fixes two unsafe upstream accounting
 behaviors: pending messages retain their recipient so `record_blocked/3` affects
@@ -205,7 +194,7 @@ calls for it yet, and it is trivial to wire later if a host needs it.
 
 | Upstream module | Elixir surface | Status | Notes |
 |---|---|---|---|
-| `humanEntropy.ts` | `AmarulaAntiban.Core.HumanEntropy` + `AmarulaAntiban.HumanEntropyWorker` | Scope reduced by design | Only `performTypingPresence` and `performPresenceToggle` are ported — the two actions whose Amarula calls (`send_chatstate/3`, `set_presence/2`) were already confirmed elsewhere in this port. `performReadReceipt` is **not** ported: it needs a real message ID, and `Plugin.receive_step`/`Session.record_incoming/2,3` currently discard the plugin ctx's `id` entirely. Porting it is a separate follow-up (tracked as a future "W7b"), not a gap in this pass. |
+| `humanEntropy.ts` | `AmarulaAntiban.Core.HumanEntropy` + `AmarulaAntiban.HumanEntropyWorker` | Full, three actions | `performTypingPresence`, `performPresenceToggle`, and `performReadReceipt` are all ported — see W8 for `performReadReceipt`, which needed `Plugin.receive_step`/`Session.record_incoming/2,3` to stop discarding the plugin ctx's message `id` (that gap was closed, not worked around). |
 
 This is the first background process in the port: every other core module
 so far is decided synchronously inside `Session.decide/4` or one of its
@@ -246,12 +235,76 @@ needs to survive `Session` restarts and reach a real Amarula connection):
   only when `human_entropy: [enabled: true, ...]` is configured — no process
   exists at all for the (default) disabled case, keeping with the rest of
   this library's "no process without a runtime reason" discipline.
-- `Session.record_incoming/2,3` now also calls `Core.HumanEntropy.track_incoming/3`
+- `Session.record_incoming/2,3,4` now also calls `Core.HumanEntropy.track_incoming/4`
   alongside the existing `reply_ratio`/`contact_graph`/`topology_throttler`
   bookkeeping.
 
-`recent_contacts` is a plain list (no dynamic map keys), so — unlike
-`GroupOperationGuard`'s `windows` — `State`/`Snapshot` wiring uses the fully
-generic `mutable_data`/`restore_struct` helpers already shared by
-`retry_tracker`/`content_variator`/etc.; no custom export/restore was needed
-for this module.
+At the time this section was first written, `recent_contacts` was a plain
+list with no nested struct, so `State`/`Snapshot` wiring used the fully
+generic `mutable_data`/`restore_struct` helpers. W8 added a third action,
+`:read_receipt`, and gave `recent_contacts` entries a `pending_message_ids`
+field — see W8 for why that also meant giving `HumanEntropy` its own
+`export/1`/`restore/2` instead.
+
+## W8 — Closing three orphaned-module gaps (ContentVariator, MessageTypeRegistry send side, ReadReceiptVariance)
+
+W1–W7 shipped several modules that were fully implemented and tested but
+never reachable from a real decision — noted inline above at the time each
+was found. This pass wired all three back in, per an explicit "religar" (wire
+it back in, don't delete it) decision, rather than removing them.
+
+**`Core.ContentVariator`** gained an `enabled: false` field (it had none
+before — every sub-toggle like `zero_width_chars` defaulted to `true`, which
+would have made variation silently on-by-default the moment it was called,
+breaking this library's "opt-in, `enabled: false`" convention everywhere
+else). `Session.decide_rate`'s `:allow` branch now calls `vary/2` right after
+the rate-limiter decision (so identical-message detection still hashes the
+caller's original content, not the varied wire text) and puts the result on
+`Decision.varied_content`; the *typo* roll runs on the varied text, not the
+original, since typo injection should act on what will actually be sent.
+`Plugin.send_step` applies `varied_content` before `typo`, generalizing the
+typo mutation helper (renamed `with_typo_text/2` → `with_text/2`) so both
+share the same field-lookup/rewrite logic against the real `Proto.Message`.
+
+**`Core.MessageTypeRegistry`**'s send side (`prepare_send/5`/`record_sent/4`)
+could not simply be folded into `before_send`/`authorize_send` the way
+`ContentVariator` and typo injection were: `prepare_send/5` requires a `type`
+that must already be `register_message_type/3`-registered, and most sends
+have no type at all — making it mandatory would turn every untyped call to
+`authorize_send/4` into an error. Instead it got the same standalone-API
+treatment as `GroupOperationGuard`: `Session.register_message_type/3`,
+`Session.prepare_typed_send/5`, `Session.record_typed_send/3`, and matching
+`AmarulaAntiban.*` facade delegates — the host opts a specific message *type*
+into pool-based rate limiting/provenance/legitimacy checks explicitly,
+independent of the main decision chain, exactly like group operations do.
+
+**`Core.ReadReceiptVariance`** stopped being a standalone, unpersisted
+`State` field and became a nested component of `Core.HumanEntropy`, backing
+a new third action alongside `:typing`/`:presence_toggle`:
+`:read_receipt`. `HumanEntropy.recent_contacts` entries now also carry
+`pending_message_ids` (populated by `track_incoming/4`'s new `message_id`
+argument, threaded from `Plugin.receive_step`'s `ctx.id` through
+`Session.record_incoming/2,3,4` — the exact gap W7 identified for
+`performReadReceipt`). `roll_cycle/2` (now needs `now_ms`, only for this
+action's backlog check) independently rolls `read_receipt_probability`; when
+it fires, `ReadReceiptVariance.backlog?/3` decides whether the whole delay is
+skipped (an old, clearly-already-late backlog) or computed via
+`ReadReceiptVariance.delay_ms/1`. `HumanEntropyWorker` executes it with
+`Amarula.mark_read/3`, and `record_cycle/2` clears the read contact's
+`pending_message_ids`. Because `read_receipt_variance` is a nested struct
+carrying its own `config.rand_fun` closure, the generic snapshot helpers
+(which only strip a *top-level* `:config` key) would have tried to
+JSON-encode a function value and crashed — `HumanEntropy` needed its own
+`export/1`/`restore/2` (exporting only `recent_contacts` and `stats`,
+reconstructing `read_receipt_variance` fresh from `State`'s config on
+restore, the same "config/injected functions always come from `fresh`"
+principle every other core module's restore already follows).
+
+None of this touched Amarula. `AmarulaAntiban.Storage.Backup` was also added
+in this pass (plan item 4c) — an `Amarula.Storage` adapter that wraps any
+other adapter and keeps the last `:retention` copies of `:creds` on disk
+before each overwrite (`:erlang.term_to_binary`, not JSON — `:creds` holds
+raw Signal key material that JSON can't represent safely). It's pure
+robustness, unrelated to ban-risk scoring: `list_backups/3`/`read_backup/2`
+are operator tools for recovering from a corrupted credentials file, not part
+of the `Amarula.Storage` behaviour contract.

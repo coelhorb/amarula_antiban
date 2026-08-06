@@ -118,11 +118,16 @@ defmodule AmarulaAntiban.Session do
   @spec record_ban_event(server(), Core.BanRecovery.ban_event_type()) :: :ok
   def record_ban_event(server, event_type), do: GenServer.call(server, {:ban_event, event_type})
 
-  @doc "Records an incoming message from Amarula's receive plugin context."
-  @spec record_incoming(server(), String.t(), String.t()) ::
+  @doc """
+  Records an incoming message from Amarula's receive plugin context.
+
+  `id`, when given, queues the message as owed a `HumanEntropy` background
+  read receipt (see `Core.HumanEntropy.track_incoming/4`).
+  """
+  @spec record_incoming(server(), String.t(), String.t(), String.t() | nil) ::
           :none | {:reply, String.t()}
-  def record_incoming(server, jid, text \\ ""),
-    do: GenServer.call(server, {:incoming, jid, text})
+  def record_incoming(server, jid, text \\ "", id \\ nil),
+    do: GenServer.call(server, {:incoming, jid, text, id})
 
   @doc "Records a failed outbound send exposed by the calling application."
   @spec record_send_failed(server(), term()) :: :ok
@@ -144,6 +149,51 @@ defmodule AmarulaAntiban.Session do
              }}
   def check_group_operation(server, op, key),
     do: GenServer.call(server, {:group_operation, op, key})
+
+  @doc """
+  Registers (or replaces, if unlocked) a named message-type definition —
+  priority, rate-limit pool, provenance/legitimacy requirements — ahead of
+  `prepare_typed_send/5`. As upstream, registering an unlocked name resets
+  that type's statistics; once a send has been prepared for it, the
+  definition is immutable.
+  """
+  @spec register_message_type(
+          server(),
+          String.t(),
+          Core.MessageTypeRegistry.Definition.t() | keyword() | map()
+        ) :: :ok | {:error, :type_locked | :invalid_definition}
+  def register_message_type(server, name, definition),
+    do: GenServer.call(server, {:register_message_type, name, definition})
+
+  @doc """
+  Validates a typed send and reserves its rate-limit pool slot, without
+  performing I/O. `type` must already be registered via
+  `register_message_type/3`. Like `GroupOperationGuard`, this doesn't flow
+  through `before_send`/`authorize_send` — a `type` is a per-message opt-in
+  the host chooses, not every send has one, so it can't be a mandatory step
+  in the main decision chain. `opts` accepts `:provenance` and
+  `:engagement_score`. On success, transport the message yourself, then call
+  `record_typed_send/3` with the returned `PreparedSend`.
+  """
+  @spec prepare_typed_send(server(), String.t(), term(), String.t(), keyword()) ::
+          {:ok, Core.MessageTypeRegistry.PreparedSend.t()}
+          | {:error, Core.MessageTypeRegistry.error_reason()}
+  def prepare_typed_send(server, recipient, content, type, opts \\ []),
+    do: GenServer.call(server, {:prepare_typed_send, recipient, content, type, opts})
+
+  @doc "Records a successful typed send after transport succeeds, from a `prepare_typed_send/5` result."
+  @spec record_typed_send(server(), Core.MessageTypeRegistry.PreparedSend.t(), String.t() | nil) ::
+          :ok
+  def record_typed_send(server, prepared, message_id \\ nil),
+    do: GenServer.call(server, {:record_typed_send, prepared, message_id})
+
+  @doc "Returns registry-wide warning signals for degraded message-type metrics and marks them observed."
+  @spec message_type_warnings(server()) :: [Core.MessageTypeRegistry.Warning.t()]
+  def message_type_warnings(server), do: GenServer.call(server, :message_type_warnings)
+
+  @doc "Returns a single type's delivery/engagement stats snapshot, or `nil` when unregistered."
+  @spec message_type_stats(server(), String.t()) :: Core.MessageTypeRegistry.Stats.t() | nil
+  def message_type_stats(server, type), do: GenServer.call(server, {:message_type_stats, type})
 
   @doc "Accounts for a presence plan after the plugin executes it."
   @spec presence_executed(server(), [Core.Presence.step()]) :: :ok
@@ -340,7 +390,7 @@ defmodule AmarulaAntiban.Session do
     {:reply, :ok, state}
   end
 
-  def handle_call({:incoming, jid, _text}, _from, state) do
+  def handle_call({:incoming, jid, _text, id}, _from, state) do
     now_ms = state.now_fun.()
     reply_ratio = Core.ReplyRatio.record_received(state.core.reply_ratio, jid)
     {suggestion, reply_ratio} = Core.ReplyRatio.suggest_reply(reply_ratio, jid)
@@ -353,7 +403,7 @@ defmodule AmarulaAntiban.Session do
         deaf_session: Core.DeafSession.activity(state.core.deaf_session, now_ms),
         topology_throttler:
           Core.TopologyThrottler.record_replied(state.core.topology_throttler, jid, now_ms),
-        human_entropy: Core.HumanEntropy.track_incoming(state.core.human_entropy, jid, now_ms)
+        human_entropy: Core.HumanEntropy.track_incoming(state.core.human_entropy, jid, id, now_ms)
     }
 
     {:reply, suggestion, schedule_persistence(%{state | core: core})}
@@ -391,6 +441,72 @@ defmodule AmarulaAntiban.Session do
         {:reply, {:deny, decision}, schedule_persistence(%{state | core: core})}
     end
   end
+
+  def handle_call({:register_message_type, name, definition}, _from, state) do
+    case Core.MessageTypeRegistry.register_message_type(
+           state.core.message_type_registry,
+           name,
+           definition
+         ) do
+      {:ok, registry} ->
+        core = %{state.core | message_type_registry: registry}
+        {:reply, :ok, schedule_persistence(%{state | core: core})}
+
+      {:error, reason, registry} ->
+        core = %{state.core | message_type_registry: registry}
+        {:reply, {:error, reason}, schedule_persistence(%{state | core: core})}
+    end
+  end
+
+  def handle_call({:prepare_typed_send, recipient, content, type, opts}, _from, state) do
+    now_ms = state.now_fun.()
+    options = Map.put(Map.new(opts), :type, type)
+
+    case Core.MessageTypeRegistry.prepare_send(
+           state.core.message_type_registry,
+           recipient,
+           content,
+           options,
+           now_ms
+         ) do
+      {:ok, prepared, registry} ->
+        core = %{state.core | message_type_registry: registry}
+        {:reply, {:ok, prepared}, schedule_persistence(%{state | core: core})}
+
+      {:error, reason, registry} ->
+        core = %{state.core | message_type_registry: registry}
+        {:reply, {:error, reason}, schedule_persistence(%{state | core: core})}
+    end
+  end
+
+  def handle_call({:record_typed_send, prepared, message_id}, _from, state) do
+    now_ms = state.now_fun.()
+
+    registry =
+      Core.MessageTypeRegistry.record_sent(
+        state.core.message_type_registry,
+        prepared,
+        message_id,
+        now_ms
+      )
+
+    core = %{state.core | message_type_registry: registry}
+    {:reply, :ok, schedule_persistence(%{state | core: core})}
+  end
+
+  def handle_call(:message_type_warnings, _from, state) do
+    now_ms = state.now_fun.()
+
+    {warnings, registry} =
+      Core.MessageTypeRegistry.warnings(state.core.message_type_registry, now_ms)
+
+    core = %{state.core | message_type_registry: registry}
+    {:reply, warnings, schedule_persistence(%{state | core: core})}
+  end
+
+  def handle_call({:message_type_stats, type}, _from, state),
+    do:
+      {:reply, Core.MessageTypeRegistry.get_stats(state.core.message_type_registry, type), state}
 
   def handle_call(:human_entropy_snapshot, _from, state),
     do: {:reply, state.core.human_entropy, state}
@@ -684,11 +800,15 @@ defmodule AmarulaAntiban.Session do
         {delay_ms, presence, plan} = presence_decision(core, recipient, content, delay_ms, now_ms)
         plan_delay_ms = Enum.sum(Enum.map(plan, &effect_delay/1))
         delay_ms = delay_ms + topology_delay_ms
-        {typo, legitimacy_signals} = maybe_inject_typo(core.legitimacy_signals, content)
+
+        {varied, content_variator} = Core.ContentVariator.vary(core.content_variator, content)
+        varied_content = if varied != content, do: varied, else: nil
+        {typo, legitimacy_signals} = maybe_inject_typo(core.legitimacy_signals, varied)
 
         core = %{
           core
           | presence: presence,
+            content_variator: content_variator,
             legitimacy_signals: legitimacy_signals,
             total_delay_ms: core.total_delay_ms + delay_ms + plan_delay_ms
         }
@@ -698,7 +818,8 @@ defmodule AmarulaAntiban.Session do
           delay_ms: delay_ms,
           health: health_status,
           presence_plan: plan,
-          typo: typo
+          typo: typo,
+          varied_content: varied_content
         }
 
         {{:allow, decision}, core, effects}
@@ -1093,7 +1214,9 @@ defmodule AmarulaAntiban.Session do
       ban_recovery: Core.BanRecovery.status(core.ban_recovery, now_ms),
       legitimacy_signals: Core.LegitimacySignals.stats(core.legitimacy_signals),
       group_operation_guard: Core.GroupOperationGuard.stats(core.group_operation_guard),
-      human_entropy: Core.HumanEntropy.stats(core.human_entropy)
+      human_entropy: Core.HumanEntropy.stats(core.human_entropy),
+      content_variator: Core.ContentVariator.stats(core.content_variator),
+      message_type_registry: Core.MessageTypeRegistry.overview(core.message_type_registry)
     }
 
     core = %{
