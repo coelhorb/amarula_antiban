@@ -2,6 +2,62 @@
 
 This document records intentional differences from baileys-antiban v4.10.0.
 
+> **A note on how W1/W2 were written.** W3 onward were written by whoever ported
+> those modules while reading the actual upstream TypeScript source
+> side-by-side, so their upstream filenames and formula comparisons are a real
+> source-to-source diff. W1/W2 below were backfilled later, after that
+> upstream clone was no longer available in the environment — they're built
+> from the current Elixir source (including fidelity claims already present in
+> its own moduledocs, presumably written with upstream access at the time)
+> plus its test suite, not a fresh line-by-line comparison. Where a module's
+> own docstring asserts exact upstream fidelity, that claim is quoted, not
+> independently re-verified here.
+
+## W1 — Rate limiting, health, timelock, and warm-up (tier-1 core)
+
+Ported in the initial scaffold, before this document existed.
+
+| Elixir module | What it does | Fidelity notes |
+|---|---|---|
+| `Core.RateLimiter` | Sliding-window per-minute/hour/day caps, an identical-content cap, and Box–Muller Gaussian jitter for human-like delays (burst allowance, new-chat delay, typing-time delay all summed). | Its own moduledoc calls out one deliberate **fix over upstream**: `record/4` checks inactivity (`time_since_last > burst_reset_ms`) *before* overwriting `last_message_time`, "Upstream bug fix: inspect inactivity before replacing `last_message_time`" — i.e., this port doesn't just port the limiter, it ports a known-corrected version of it. Hour/minute limits stay soft (return a delay), matching what the module calls "the upstream contract"; day and identical-content limits are hard denies. `inject_timestamps/3` (for merging externally known sends after a reconnect) is documented as "preserving the upstream reconnect protection." |
+| `Core.Health` | 0–100 ban-risk score from disconnects/forbidden(403)/logged-out(401)/timelock(463)/failed-message events in a rolling window, decaying over time (2 pts/min if the last bad event was severe, 5 pts/min otherwise), mapped to a `:low/:medium/:high/:critical` risk tier that can auto-pause sending. | Moduledoc: "Risk-change callbacks from the TypeScript implementation are represented as `{:risk_changed, status}` effects" — the callback *shape* is a direct port; whether the exact score weights (40/60/25/30/20 points per event type) match upstream's own numbers wasn't independently re-verified in this pass. |
+| `Core.TimelockGuard` | Reachout-timelock (WhatsApp error 463) state machine: blocks new contacts while locked, always allows known chats/groups, auto-lifts after a buffered expiry, and schedules its own resume. | Moduledoc: "preserves the upstream timer-race fix without processes or `Process.cancel_timer/1` in the core" — timer scheduling is returned as a `{:schedule_resume, generation, delay_ms}` effect and a stale `generation` passed back to `resume/3` is a no-op, so a resume timer racing a newer lock update can't incorrectly lift it. |
+| `Core.WarmUp` | New/long-inactive-account daily send-limit ramp: `round(day1_limit * growth_factor ^ day_index)` for `warmup_days`, then unlimited (`:graduated`). Resets if inactive past `inactivity_threshold_hours`. | Moduledoc states the curve formula is "exactly matching baileys-antiban" — the one direct "exact match" claim among W1's modules. `growth_factor` defaults to a random value in `[1.5, 2.2]` per session when not explicitly configured, sampled once via the injected `rand_fun` (not upstream Math.random directly, but the same range). |
+
+## W2 — Contact graph, presence, and connection-quality modules (tier-2 core)
+
+Ported in the second scaffolding pass, also before this document existed.
+
+| Elixir module | What it does | Fidelity notes |
+|---|---|---|
+| `Core.ContactGraph` | Per-contact handshake state machine (`:stranger -> :handshake_sent -> :handshake_complete -> :known`) plus a group "lurk period" before a newly-joined group may be messaged, and a daily new-stranger cap. | Moduledoc: "mirrors the upstream progression" for the four-state machine. Group hotspot/mutual-group signals are out of scope here (see `TopologyThrottler` in W4, which explicitly documents that gap). |
+| `Core.ContentVariator` | Zero-width-character insertion, punctuation cycling, emoji padding, and synonym substitution to avoid sending byte-identical repeated messages. | **Not wired into the send path.** `state.ex` constructs one per session and `Snapshot` persists its counter, but grepping `session.ex`/`plugin.ex` turns up no call to `vary/2` or `vary_bulk/3` anywhere — no outbound message is ever actually varied today. The module and its 3 tests are correct in isolation; it just isn't reachable from a real send yet. |
+| `Core.DeafSession` | Detects a connected session that stops receiving any message activity for `timeout_ms` after `min_uptime_ms`, recommending a reconnect. | Small, self-contained pure detector; no explicit upstream-fidelity claim in its own docs to quote. |
+| `Core.DeliveryTracker` | Tracks sent-vs-delivered ratio in a rolling window keyed by Amarula message ID; emits `{:low_delivery_rate, rate}` at most once/hour when the rate drops under `low_rate_threshold` with enough samples. | No explicit upstream-fidelity claim to quote; wired into `Session`'s receipt handling (`record_receipts/4`) and surfaced in `Session.stats/1`. |
+| `Core.Disconnect` | Classifies a WhatsApp disconnect status code into `:fatal/:recoverable/:rate_limited/:unknown` with a reconnect recommendation and backoff. | Moduledoc: "Classifies a disconnect code using upstream numbers and Amarula's 515 lifecycle" — codes 401/405/409/412/428/429/500/503/1000 use what the module calls upstream's numbers; 515 is an **intentional, documented Amarula divergence**: "the normal post-pairing restart protocol... Treating it as fatal would fight the host lifecycle and incorrectly require a new QR code," so it's classified `:recoverable` here instead of however upstream (which has no Amarula-specific restart lifecycle) would classify it. |
+| `Core.JidCircuitBreaker` | Per-recipient closed/open/half-open circuit breaker (fails closed after `failure_threshold`, cools down, then allows exactly one half-open probe) plus a broadcast-jitter helper. | Its own comment flags a **documented upstream bug this port fixes**: on the open→half-open transition, "The upstream implementation forgot to mark [the probe] used here, contradicting its own test and contract" — this port marks the transition itself as the consumed probe, matching upstream's *stated* contract rather than its actual (buggy) behavior. |
+| `Core.Presence` | The most detailed module in this tier: circadian activity curves (`:office/:social/:global`) with per-hour multipliers, a piecewise circadian delay multiplier by profile (`:night_owl/:early_bird/:always_on/:default`), a WPM-based Gaussian typing-time model chunked into typing/think-pause steps, distraction pauses, offline gaps, and read-receipt delay/skip rolls. | No single "matches upstream" line in its moduledoc, but the sheer specificity of the curve tables and the piecewise multiplier formula (distinct constants for each hour band) reads as a faithful constants-for-constants port rather than a reinterpretation — not independently re-verified against source in this pass. Its own `read_receipt/2` duplicates what `Core.ReadReceiptVariance` (below) was apparently meant to do. |
+| `Core.ReadReceiptVariance` | A standalone Gaussian read-receipt delay calculator (clamped `mean_ms ± std_dev_ms`) plus a "backlog" check to skip delaying receipts for old messages. | **Not wired anywhere.** `state.ex` is the *only* other file that references this module in the whole codebase — no call in `session.ex`, and it isn't even in `Snapshot`'s export/restore payload (unlike `ContentVariator`, which is at least persisted). `Core.Presence.read_receipt/2` independently reimplements the same kind of Gaussian-delay decision inline. This looks like an earlier, superseded module that was never removed once `Presence` grew its own read-receipt logic — worth a decision (wire it, or delete it) rather than leaving it silently inert. |
+| `Core.ReconnectThrottle` | Post-reconnect send-rate ramp: starts at `initial_rate_multiplier`, steps up over `ramp_steps` across `ramp_duration_ms` to full rate, gating sends against a one-minute rolling budget while ramping. | No explicit upstream-fidelity claim to quote; wired into `Session.decide_reconnect/7`, between the topology and group-profile guards. |
+| `Core.ReplyRatio` | Per-contact (or global) sent/received ratio floor with a cooldown on violation, plus an optional auto-reply-template suggestion on inbound messages. | Moduledoc: "The guard is opt-in, matching the upstream default" (`enabled: false`). |
+| `Core.RetryTracker` | Manual/analytical retry bookkeeping by reason code (bad-mac, no-session, timeout, etc.), spiral detection (`spiral_threshold`), and retry-limit-reached/-exceeded effects. | Moduledoc is explicit about scope: "Amarula owns protocol retry caching and resend. This module retains the upstream antiban statistics as a manual API... It never claims to stop, resend, or otherwise control Amarula's transport." Classification text-matching (`"bad mac"`, `"no session"`, etc.) is a plausible but not independently re-verified port of upstream's own string patterns. |
+| `Core.SessionHealth` | Bad-MAC sliding-window monitor: counts decrypt failures marked `bad_mac?`, flags the session `:degraded` at `bad_mac_threshold` within `bad_mac_window_ms`, recovers once the window clears. | No explicit upstream-fidelity claim to quote; small, self-contained. |
+
+Two more modules share `ContentVariator`'s and `ReadReceiptVariance`'s problem
+of being real, tested, and *unreachable*: **`Core.MessageTypeRegistry`'s send
+side.** The W3 entry below describes it as "Full, OTP-native," which is true
+of the module in isolation, but only its *receive* side
+(`record_read/2`/`record_delivered/2`, called from `Session`'s receipt
+handler) is actually wired up. `prepare_send/5` and `record_sent/4` — the
+functions that would register a message before it goes out, which is what
+`priority pool limits`/`pending tracking`/`legitimacy validation` are *for* —
+are never called from `session.ex` or `plugin.ex`, and there's no
+`Session`/facade delegate for them either (unlike `GroupOperationGuard.check/4`,
+which has an equivalent manual API deliberately exposed through
+`Session.check_group_operation/3`). Until that's wired up, receipts arrive for
+message IDs the registry never registered, so registration locking and
+priority-pool gating don't actually gate anything today.
+
 ## W3 — LID, JID, retry reasons, and message types
 
 | Upstream module | Elixir surface | Status | Notes |
@@ -10,7 +66,7 @@ This document records intentional differences from baileys-antiban v4.10.0.
 | `lidFirstResolver.ts` | Amarula LID/PN APIs | Delegated to Amarula | Importing Baileys `lid-mapping-*_reverse.json` auth files does not apply to Amarula storage. Amarula's mapping store and contacts lookup own this function. |
 | `jidCanonicalizer.ts` | `AmarulaAntiban.Core.JidCanonicalizer` | Partial by design (D14) | Ports stable `canonical_key/3` behavior and hit/miss statistics only. For an `@lid`, the PN is supplied by the caller after an Amarula lookup and is never retained locally. Outbound target rewriting and event-based identity learning remain delegated to Amarula. |
 | `retryReason.ts` | `AmarulaAntiban.Core.RetryReason` | Full | Preserves codes `0, 1, 3, 4, 5, 7, 8, 9`, the four-code MAC set, parsing, and descriptions. Amarula still owns retry transport/re-encryption. |
-| `messageTypeRegistry.ts` | `AmarulaAntiban.Core.MessageTypeRegistry` | Full, OTP-native | Preserves registration locking, provenance and legitimacy validation, priority pool limits, pending tracking, engagement scoring, warnings, cleanup, and export/import. The TypeScript `send()` I/O is split into pure `prepare_send/5` and `record_sent/4`; Amarula performs transport between them. Clock and RNG are injected. |
+| `messageTypeRegistry.ts` | `AmarulaAntiban.Core.MessageTypeRegistry` | Full module, **half wired** | Preserves registration locking, provenance and legitimacy validation, priority pool limits, pending tracking, engagement scoring, warnings, cleanup, and export/import — as a module, in isolation, this is a complete port. The TypeScript `send()` I/O is split into pure `prepare_send/5` and `record_sent/4`, intended for Amarula to perform transport between them, but **neither is actually called** from `session.ex`/`plugin.ex` today, and there's no `Session`/facade delegate for them (see the W1/W2 section above for the full explanation). Only the receive side (`record_read/2`/`record_delivered/2`) is wired into `Session`'s receipt handler. Clock and RNG are injected. |
 
 `MessageTypeRegistry` intentionally fixes two unsafe upstream accounting
 behaviors: pending messages retain their recipient so `record_blocked/3` affects
