@@ -28,6 +28,32 @@ decision chain — rate limits, warm-up, ban recovery, timelock, presence
 simulation, and (if configured) typo injection and content variation — with
 no other code changes required.
 
+## Hardening the underlying Amarula connection
+
+Everything above shapes antiban's own decision chain, but `attach/2` receives
+an already-built `Amarula.Conn.t()` — it doesn't control the connection's own
+fingerprint or timing. Two things worth setting on the `Amarula.new/1` config
+map itself, before `attach/2`:
+
+```elixir
+config
+|> AmarulaAntiban.DeviceProfiles.merge(:windows_chrome)
+|> Map.put(:keep_alive_jitter_ms, 5_000)
+|> Amarula.new()
+|> AmarulaAntiban.attach(preset: :conservative)
+|> Amarula.connect()
+```
+
+`AmarulaAntiban.DeviceProfiles` ships a handful of curated, internally
+consistent browser/OS/device combinations (`:macos_chrome`, `:windows_chrome`,
+`:windows_edge`, `:ubuntu_chrome`, or `DeviceProfiles.random/1` to pick one) —
+every connection sharing Amarula's exact same default fingerprint is itself a
+signal. It deliberately never sets `:mcc`/`:mnc`: those describe the real
+SIM/carrier the account is registered under, which this library can't guess
+correctly, so pass them yourself if you know the real values. `keep_alive_jitter_ms`
+(an `Amarula.Config` option, not an antiban one) randomizes the WA-level
+keep-alive ping interval instead of a perfectly fixed one.
+
 ## Presets
 
 `preset:` picks a built-in `AmarulaAntiban.Presets.Config` baseline —

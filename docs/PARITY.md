@@ -308,3 +308,33 @@ raw Signal key material that JSON can't represent safely). It's pure
 robustness, unrelated to ban-risk scoring: `list_backups/3`/`read_backup/2`
 are operator tools for recovering from a corrupted credentials file, not part
 of the `Amarula.Storage` behaviour contract.
+
+## W9 — Hardening the underlying Amarula connection (`AmarulaAntiban.DeviceProfiles`)
+
+`plano_para_portar.md` (repo root)'s original scoping ruled
+`deviceFingerprint.ts`/`sessionFingerprint.ts`/`stealthConnect.ts`/
+`proxyRotator.ts` out of *this* library's scope, since
+they need changes in Amarula itself, not the antiban decision chain — `attach/2`
+receives an already-built `Amarula.Conn.t()` and never touches how it was
+constructed. That verdict hasn't changed: `attach/2` still can't reach into
+Amarula's connection config. But two of those four items got real Amarula-side
+fixes (as a fork, not upstream `tubedude/amarula` — not yet proposed there):
+`mcc`/`mnc`/`os_version`/`os_build_number`/`device_name` became configurable
+instead of fixed literals, `keep_alive_jitter_ms` was added, and a real bug
+was found and fixed along the way — the WebSocket handshake's `Origin`/
+`User-Agent` headers were computed and logged but never actually sent.
+
+`AmarulaAntiban.DeviceProfiles` is what that unlocks on this side: a small,
+curated set of internally-consistent browser/OS/device combinations the host
+merges into their own `Amarula.new/1` config map before calling it — every
+connection sharing Amarula's single hardcoded default fingerprint was itself
+a signal. It intentionally never sets `:mcc`/`:mnc` — those describe the
+account's real carrier, which no library can guess correctly, and a
+plausible-looking *wrong* code is arguably worse than the generic default.
+
+`stealthConnect.ts` remains resolved by Amarula's existing
+`:mark_online_on_connect` (see the original audit table this plan opened
+with). `proxyRotator.ts` remains the one item still genuinely unaddressed:
+Amarula's WebSocket transport (`websockex`) opens `:gen_tcp`/`:ssl` directly
+from a URL with no proxy hook, so supporting it means patching that
+transport layer, not adding config — a bigger, separate piece of work.
