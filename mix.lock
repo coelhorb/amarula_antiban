@@ -1,5 +1,5 @@
 %{
-  "amarula": {:git, "https://github.com/coelhorb/amarula.git", "b70770ce9be824b874605813b0e2fc34bbd37f32", [tag: "v0.5.9-fork_diff"]},
+  "amarula": {:git, "https://github.com/coelhorb/amarula.git", "fef8694a558911e0bf001976d3248b7faddf3304", [tag: "v0.5.10-fork_diff"]},
   "base64url": {:hex, :base64url, "1.0.1", "f8c7f2da04ca9a5d0f5f50258f055e1d699f0e8bf4cfdb30b750865368403cf6", [:rebar3], [], "hexpm", "f9b3add4731a02a9b0410398b475b33e7566a695365237a6bdee1bb447719f5c"},
   "binary": {:hex, :binary, "0.0.5", "20d816f7274ea34f1b673b4cff2fdb9ebec9391a7a68c349070d515c66b1b2cf", [:mix], [], "hexpm", "ee1e9ebcab703a4e24db554957fbb540642fe9327eb9e295cb3f07dd7c11ddb2"},
   "bunt": {:hex, :bunt, "1.0.0", "081c2c665f086849e6d57900292b3a161727ab40431219529f13c4ddcf3e7a44", [:mix], [], "hexpm", "dc5f86aa08a5f6fa6b8096f0735c4e76d54ae5c9fa2c143e5a1fc7c1cd9bb6b5"},
