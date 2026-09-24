@@ -26,7 +26,7 @@ defmodule AmarulaAntiban.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:amarula, git: "https://github.com/coelhorb/amarula.git", tag: "v0.5.10-fork_diff"},
+      {:amarula, git: "https://github.com/coelhorb/amarula.git", tag: "v0.5.11-fork_diff"},
       {:telemetry, "~> 1.2"},
       {:jason, "~> 1.4"},
       {:zoneinfo, "~> 0.1.9"},
